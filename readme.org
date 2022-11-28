@@ -1,0 +1,33 @@
+* bufferpool
+
+Different implementations of bufferpool.
+
+Designed around prior experiences with "larger than memory" problems.
+
+** Python
+
+This is the prototype, used for testing ideas and experiementing
+
+** Go
+
+This will be used in my own projects.
+
+** plans
+
+Common Lisp, Rust
+
+* license
+
+  (C) Affero GPL v 3.0 - https://www.gnu.org/licenses/agpl-3.0.en.html
+
+  This means, in short, you can not use this software at all - either
+  in packaged software or as a SaaS service without releasing your
+  modifications.
+
+  Contact me if you want to use it commercially.
+
+  paul@nathan.house
+
+
+* references
+https://15445.courses.cs.cmu.edu/fall2020/notes/05-bufferpool.pdf
