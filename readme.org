@@ -2,19 +2,31 @@
 
 Different implementations of bufferpool.
 
-Designed around prior experiences with "larger than memory" problems.
+Designed around prior experiences with "larger than memory" problems. Data analysis, append-only databases, etc. 
+All things I've done professionally or personally.
+
+If you happen upon this project and think that, yes, you'd like to help, or if you want to use it, I welcome help 
+(but I'll be quite stubborn about the license). 
+
+* implementation languages.
 
 ** Python
 
-This is the prototype, used for testing ideas and experiementing
+This is the prototype, used for testing ideas and experiementing. Effectively the standard.
 
 ** Go
 
-This will be used in my own projects.
+This will be used in my own projects. 
 
 ** plans
 
 Common Lisp, Rust
+
+- CL - for sophistictated projects
+
+- Rust - for really going for performance and learning about the borrow checker.
+
+
 
 * license
 
