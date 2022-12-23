@@ -6,13 +6,14 @@ import random
 
 import bufferpool
 
-class TestDiskPoll(unittest.TestCase):
+class TestDiskPool(unittest.TestCase):
 
     def test_diskpool(self):
-        with tempfile.TemporaryDirectory() as d:
+            d = tempfile.mkdtemp()
             with open(os.path.join(d, "page_0"), "w") as f:
                 f.write(json.dumps("aleph bet gimel"))
-            dp = bufferpool.DiskPool(d)
+            dp = bufferpool.DiskPool(1, d)
+            # can we read things that already existed- without overwriting them?
             self.assertEqual(dp.read_frame(0).data(), "aleph bet gimel")
             example = { "index": True }
             dp.write_frame(1, bufferpool.PageFrame(example))
@@ -71,11 +72,33 @@ class TestPage(unittest.TestCase):
         self.assertEqual(p.count_pins(), 0)
 
 class TestBufferPool(unittest.TestCase):
+    def test_ensure_allocation(self):
+        with tempfile.TemporaryDirectory() as d:
+            dp = bufferpool.DiskPool(10, d)
+            for i in range(0, 10):
+                dp.write_frame(i, bufferpool.PageFrame({'init': i}))
+
+            bp = bufferpool.BufferPool(3, dp, bufferpool.bottom_evictor)
+            bp.ensure_allocation(2)
+            for x in range(0, 10):
+                with bp[x] as d:
+                    self.assertEqual(d['init'], x)
+
+            with self.assertRaises(IndexError):
+                bp[10]
+            bp.ensure_allocation(11)
+            bp[10]
+
+
     def test_happy(self):
         with tempfile.TemporaryDirectory() as d:
-            dp = bufferpool.DiskPool(d)
-            dp.preallocate(10, lambda i: {'init': i})
+            dp = bufferpool.DiskPool(10, d)
+
+            for i in range(0, 10):
+                dp.write_frame(i, bufferpool.PageFrame({'init': i}))
+
             bp = bufferpool.BufferPool(3, dp, bufferpool.bottom_evictor)
+
             with bp[0] as d:
                 self.assertEqual(d['init'], 0)
             bp[1]
@@ -92,6 +115,39 @@ class TestBufferPool(unittest.TestCase):
                 self.assertEqual(d['init'], 9)
             bp[4]
 
+    def test_new_page(self):
+        d = tempfile.mkdtemp()
+        dp = bufferpool.DiskPool(5, d)
+        for i in range(0, 5):
+            dp.write_frame(i, bufferpool.PageFrame({'init': i}))
+
+        bp = bufferpool.BufferPool(3, dp, bufferpool.bottom_evictor)
+
+        # parameters: 3 slots; 5 backing frames on disk.
+        bp[0]
+        bp[1]
+        bp[2]
+        bp[3]
+        bp[4]
+
+        # all slots have been used, all frames read.
+        bp.falloc()
+        bp[5] ={"test": True}
+        with bp[5] as d:
+            self.assertEqual(d, {"test":True})
+
+
+class TestSlabMapper(unittest.TestCase):
+    def test_simple(self):
+        #dp = bufferpool.MockPool(30)
+        d = tempfile.mkdtemp()
+        dp = bufferpool.DiskPool(5, d)
+        bp = bufferpool.BufferPool(3, dp, bufferpool.bottom_evictor)
+        sm = bufferpool.SlabMapper(bp, 10)
+        dataset = list(map(lambda i: {'data': i}, range(100, 500)))
+        sm.flush(dataset)
+        got = sm.load()
+        self.assertEqual(dataset, got)
 
 if __name__ == '__main__':
     unittest.main()

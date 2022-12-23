@@ -1,7 +1,7 @@
 ########################################
-# mempool.py
+# bufferpool.py
 #
-# an implementation of a mempool in Python 3.
+# an implementation of a buffer pool in Python 3.
 #
 # (C) AGPL3 Paul Nathan 2022
 import json
@@ -72,22 +72,20 @@ class UniqueStack(object):
 class FramePool(object):
     def assess_size(self):
         raise NotImplemented
-    def size(self, id):
+    def size(self):
         raise NotImplemented
     def read_frame(self, id):
         raise NotImplemented
     def write_frame(self, id, data):
         raise NotImplemented
+    def falloc(self, count):
+        raise NotImplemented
 
 class DiskPool(FramePool):
-    def __init__(self, dirname):
+    def __init__(self, limit, dirname):
         self._dirname = dirname
-        self._size = None
-
-    def preallocate(self, size, f):
-        for i in range(0, size):
-            self.write_frame(i, PageFrame(f(i)))
-        self._size = size
+        self._size = 0
+        self.falloc(limit)
 
     def assess_size(self):
         flist = []
@@ -110,6 +108,17 @@ class DiskPool(FramePool):
         with open(os.path.join(self._dirname, f"page_{pageid}"), 'r') as f:
             return PageFrame(json.loads(f.read()))
 
+    def falloc(self, count):
+        prior_size = self._size
+        # increase bound
+        self._size += count
+        for i in range(0, count):
+            pageid = prior_size + i
+            filename = os.path.join(self._dirname, f"page_{pageid}")
+            if not os.path.isfile(filename):
+                with open(filename, 'w') as f:
+                    f.write(json.dumps({}))
+
     def write_frame(self, pageid, data):
         assert isinstance(data, PageFrame)
         with open(os.path.join(self._dirname, f"page_{pageid}"), 'w') as f:
@@ -118,13 +127,28 @@ class DiskPool(FramePool):
 class MockPool(FramePool):
     def __init__(self, limit):
         self._frames = {}
+        self._size = 0
+        self.falloc(limit)
+
+    def size(self):
+        return self._size
+
     def assess_size():
         return len(self._frames)
+
     def read_frame(self, pageid):
-        return frame[pageid]
+        return PageFrame(self._frames[pageid])
+
+    def falloc(self, count):
+        prior_size = self._size
+        for i in range(0, count):
+            pageid = prior_size + i
+            self.write_frame(pageid, PageFrame(None))
+        self._size += count
+
     def write_frame(self, pageid, data):
         assert isinstance(data, PageFrame)
-        frame[pageid] = data
+        self._frames[pageid] = data.data()
 
 class PageFrame(object):
     # a Page is created, associated with some specific data frame.
@@ -137,11 +161,13 @@ class PageFrame(object):
         self._dirty = False
     def __repr__(self):
         return f"p: {self._pins}, d: {self._dirty}: {self._frame}"
+
     def data(self):
         return self._frame
     def set_data(self, data):
         self._dirty = True
         self._frame = data
+
     def count_pins(self):
         return self._pins
     def inc_pin(self):
@@ -150,10 +176,13 @@ class PageFrame(object):
     def dec_pin(self):
         self._pins = self._pins - 1
         return self._pins
+
     def is_dirty(self):
         return self._dirty
     def make_dirty(self):
         self._dirty = True
+    def undirty(self):
+        self._dirty = False
 
     def __enter__(self):
         self.inc_pin()
@@ -202,7 +231,7 @@ class BufferPool(object):
         '_total_page_count',
     ]
     def __init__(self, size, pool, evictor):
-        # This size is the size of the mempool.
+        # This size is the size of the buffer pool
         self._size = size
         self._pages = [None for x in range(0, size)]
         # map of pageid to index in self._pages
@@ -213,20 +242,19 @@ class BufferPool(object):
         self._evictor = evictor
         self._stack = UniqueStack()
 
-    def release_page(self, id):
+    def release_page(self, idx):
         """
         Page is released for later eviction
         """
-        if id > self._pool.size() - 1:
-            raise IndexError("mempool index out of range")
+        if idx > self._pool.size() - 1:
+            raise IndexError(f"buffer pool index out of range{idx}")
 
-        if id not in self._active_pages:
+        if idx not in self._active_pages:
             # this is not a valid page for writing: something has
             # evicted it from under our feet.
             raise EvictionError()
 
-        self._active_pages[id].pin_dec()
-
+        self._active_pages[idx].pin_dec()
 
     def acquire_page(self, id):
         """
@@ -236,15 +264,44 @@ class BufferPool(object):
         p.inc_pin()
         return p
 
-    def __getitem__(self, id):
-        return self.get_page(id)
+    def __getitem__(self, idx):
+        return self.get_page(idx)
 
-    def get_page(self, id):
-        if id > self._pool.size() - 1:
-            raise IndexError("mempool index out of range")
+    def __setitem__(self, idx, value):
+        """
+        Writes value to page, then syncs it.
+        """
+        item = self.acquire_page(idx)
+        item.set_data(value)
+        self.fsync_item(idx)
+
+    def ensure_allocation(self, idx):
+        to_be_allocated = idx - (self._pool.size() - 1)
+        if to_be_allocated > 0:
+            self._pool.falloc(to_be_allocated)
+
+
+    def falloc(self):
+        self._pool.falloc(1)
+
+    def fsync_item(self, idx):
+        if self._active_pages[idx].is_dirty():
+            self._pool.write_frame(idx, self._active_pages[idx])
+            self._active_pages[idx].undirty()
+
+    def fsync(self):
+        for key in self._active_pages:
+            self.fsync_item(key)
+
+    def size(self):
+        return self._pool.size()
+
+    def get_page(self, idx):
+        if idx > self._pool.size() - 1:
+            raise IndexError(f"mempool index out of range {idx}")
 
         # if we don't have the data already
-        if id not in self._active_pages:
+        if idx not in self._active_pages:
 
             # precondition: we don't have the page loaded
 
@@ -276,13 +333,42 @@ class BufferPool(object):
                 if self._pages[i] == None:
                     target_index = i
                     break
-            frame = self._pool.read_frame(id)
+            frame = self._pool.read_frame(idx)
             self._pages[target_index] = frame
-            self._active_pages[id] = frame
-            self._reverse_active_pages[target_index] = id
+            self._active_pages[idx] = frame
+            self._reverse_active_pages[target_index] = idx
 
             # postcondition: the frame is loaded into memory and wired into the map
 
-        # push id onto the lru
-        self._stack.push(id)
-        return self._active_pages[id]
+        # push idx onto the lru
+        self._stack.push(idx)
+        return self._active_pages[idx]
+
+
+
+
+# the SlabMapper maps an array of Objects onto the bufferpool.
+# crucially, it _must_ be a 0 indexed sequence. Notably, the
+# Bufferpool is a 0 indexed sequence, but does not presume any
+# structure on the data.
+class SlabMapper(object):
+    def __init__(self, bp, stride):
+        """
+        bp - bufferpool
+        stride - number of elements to map into a given frame.
+        """
+        self._bp = bp
+        self._stride = stride
+    def flush(self, seq):
+        required_allocation = int(len(seq) / self._stride)
+        self._bp.ensure_allocation(required_allocation - 1)
+        for i in range(0, required_allocation):
+            bottom = i*self._stride
+            top = (i+1)*self._stride
+            self._bp[i] = seq[bottom:top]
+    def load(self):
+        result = []
+        for i in range(0, self._bp.size()):
+            sublist = self._bp.get_page(i)
+            result.extend(sublist.data())
+        return result
