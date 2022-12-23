@@ -1,15 +1,10 @@
 
-# Hacked version of cicd template, without the venv, 
+# Hacked version of cicd template, without the venv. Glued python and go together.
 
-# This file is a template, and might need editing before it works on your project.
-# To contribute improvements to CI/CD templates, please follow the Development guide at:
-# https://docs.gitlab.com/ee/development/cicd/templates.html
-# This specific template is located at:
-# https://gitlab.com/gitlab-org/gitlab/-/blob/master/lib/gitlab/ci/templates/Python.gitlab-ci.yml
 
-# Official language image. Look for the different tagged releases at:
-# https://hub.docker.com/r/library/python/tags/
-image: python:latest
+stages:
+  - test
+  - build
 
 # Change pip's cache directory to be inside the project directory since we can
 # only cache local items.
@@ -26,10 +21,35 @@ cache:
     - .cache/pip
     - venv/
 
-before_script:
-  - python --version 
-
-test:
+pytest:
+  stage: test
+  image: python:latest
   script:
+    - python --version
     - python test_bufferpool.py
 
+
+gotest:
+  stage: test
+  image: golang:latest
+  script:
+#    - go vet $(go list ./... | grep -v /vendor/)
+#    - go test -v -race $(go list ./... | grep -v /vendor/)
+    - go install gotest.tools/gotestsum@latest
+    - cd go
+    - gotestsum --junitfile report.xml --format standard-verbose
+  artifacts:
+    when: always
+    reports:
+      junit: go/report.xml
+
+compile:
+  stage: build
+  image: golang:latest
+  script:
+    - cd go
+    - mkdir -p bin
+    - go build -o bin ./...
+  artifacts:
+    paths:
+      - go/bin
