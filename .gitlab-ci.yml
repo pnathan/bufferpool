@@ -1,3 +1,6 @@
+
+# Hacked version of cicd template, without the venv, 
+
 # This file is a template, and might need editing before it works on your project.
 # To contribute improvements to CI/CD templates, please follow the Development guide at:
 # https://docs.gitlab.com/ee/development/cicd/templates.html
@@ -24,14 +27,9 @@ cache:
     - venv/
 
 before_script:
-  - python --version  # For debugging
-  - pip install virtualenv
-  - virtualenv venv
-  - source venv/bin/activate
+  - python --version 
 
 test:
   script:
-    - pip install tox flake8  # you can also use tox
-    - tox -e py36,flake8
-    
+    - python test_bufferpool.py
 

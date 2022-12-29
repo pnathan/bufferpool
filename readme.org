@@ -14,6 +14,11 @@ If you happen upon this project and think that, yes, you'd like to help, or if y
 
 This is the prototype, used for testing ideas and experiementing. Effectively the standard.
 
+*** notes
+
+The Python library is intentionally "pure" stdlib Python, not using any third party packages.  This 
+simplifies testing, deployments, etc.
+
 ** Go
 
 This will be used in my own projects. 
