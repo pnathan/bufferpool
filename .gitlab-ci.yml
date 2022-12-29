@@ -31,5 +31,5 @@ before_script:
 
 test:
   script:
-    - python -v test_bufferpool.py
+    - python test_bufferpool.py
 

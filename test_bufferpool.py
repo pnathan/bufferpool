@@ -150,4 +150,4 @@ class TestSlabMapper(unittest.TestCase):
         self.assertEqual(dataset, got)
 
 if __name__ == '__main__':
-    unittest.main()
+    unittest.main(verbosity=2)
