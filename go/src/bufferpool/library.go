@@ -181,27 +181,6 @@ func (o *DiskPool) WriteFrame(idx int, pf *PageFrame) error {
 	return nil
 }
 
-type Evictor interface {
-	// This SHOULD be the signature. But Go is brain-damaged.
-	//Evict(PageFrame, map[PageFrame]int, UniqueStack[int]) error
-	Evict(*PageFrame, map[int]int, *UniqueStack[int]) error
-}
-
-type RandomEvictor struct{}
-
-func (o RandomEvictor) Evict(pf *PageFrame, pf_idx map[int]int, lru *UniqueStack[int]) error {
-	// todo
-	return nil
-}
-
-type BottomEvictor struct{}
-
-func (o BottomEvictor) Evict(pf *PageFrame, pf_idx map[int]int, lru *UniqueStack[int]) error {
-	// todo
-	return nil
-
-}
-
 type PageFrame struct {
 	// Does the mutex belong here? probably.
 	m     sync.RWMutex
@@ -274,9 +253,49 @@ func (o *PageFrame) WithWrite(f func([]byte) error) error {
 	return f(o.frame)
 }
 
+type Evictor interface {
+	// This SHOULD be the signature. But Go is brain-damaged.
+	//Evict(PageFrame, map[PageFrame]int, UniqueStack[int]) error
+	Evict(*PageFrame, map[int]int, *UniqueStack[int]) error
+}
+
+type RandomEvictor struct{}
+
+func (o RandomEvictor) Evict(pf *PageFrame, pf_idx map[int]int, lru *UniqueStack[int]) error {
+	// todo
+	return nil
+}
+
+type BottomEvictor struct{}
+
+func (o BottomEvictor) Evict(pf *PageFrame, pf_idx map[int]int, lru *UniqueStack[int]) error {
+	// todo
+	return nil
+
+}
+
 type BufferPoolId = int
 
 type FramePoolId = int
 
 type BufferPool struct {
+	size               int
+	pages              []*PageFrame
+	activePages        map[BufferPoolId]FramePoolId
+	reverseActivePages map[FramePoolId]BufferPoolId
+	lru                *UniqueStack[int]
+	pool               FramePool
+	evictor            Evictor
+}
+
+func NewBufferPool(size int, pool FramePool, evictor Evictor) *BufferPool {
+	return &BufferPool{
+		size:               size,
+		pages:              []*PageFrame{},
+		activePages:        map[BufferPoolId]FramePoolId{},
+		reverseActivePages: map[FramePoolId]BufferPoolId{},
+		lru:                NewUniqueStack[int](),
+		pool:               pool,
+		evictor:            evictor,
+	}
 }

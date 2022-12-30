@@ -98,3 +98,8 @@ func TestDiskPoolRWSimple(t *testing.T) {
 	assert.Equal(t, string(f.frame), "abc")
 
 }
+
+func TestBasicBufferPool(t *testing.T) {
+	bp := NewBufferPool(10, NewMockPool(10), RandomEvictor{})
+	assert.NotNil(t, bp)
+}
