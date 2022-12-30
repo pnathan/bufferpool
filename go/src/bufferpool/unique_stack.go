@@ -10,8 +10,12 @@ import "sync"
 type UniqueStack[K comparable] struct {
 	// This is a pretty bad implementation internally.
 	// It should be a tree without dupes. I hate writing rotations for tree algorithms...
+
+	// TODO: make Data, Order private.
 	Data  map[K]bool
 	Order []K
+	// TODO: move the mutex to a variable to be inaccessible and
+	// the API fully thread-safe
 	sync.RWMutex
 }
 

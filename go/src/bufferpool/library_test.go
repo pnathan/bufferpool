@@ -1,12 +1,67 @@
 package bufferpool
 
 import (
+	"math/rand"
+	"sync"
 	"testing"
 
-	"github.com/stretchr/testify/assert"
+	assert "github.com/stretchr/testify/assert"
 )
 
-func TestSimpleFramePool(t *testing.T) {
+func TestHappyMockPool(t *testing.T) {
 	x := NewMockPool(0)
 	assert.Equal(t, x.Size(), 0)
+	_, err := x.ReadFrame(0)
+	assert.Error(t, err)
+	x.WriteFrame(0, NewPageFrame([]byte("abc")))
+	f, err := x.ReadFrame(0)
+	assert.Nil(t, err)
+	assert.Equal(t, string(f.frame), "abc")
+
+	x.Falloc(3)
+	assert.Equal(t, x.Size(), 3)
+	value, err := x.AssessSize()
+	assert.Nil(t, err)
+	assert.Equal(t, value, 3)
+
+	x.Falloc(4)
+	assert.Equal(t, x.Size(), 7)
+}
+
+const letterBytes = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
+
+func RandStringBytesRmndr(n int) string {
+	b := make([]byte, n)
+	for i := range b {
+		b[i] = letterBytes[rand.Int63()%int64(len(letterBytes))]
+	}
+	return string(b)
+}
+
+func TestMultiThreadedMockPool(t *testing.T) {
+	x := NewMockPool(3)
+	var wg sync.WaitGroup
+	datalist := make([]string, 1000)
+	for i := 0; i < 1000; i++ {
+		datalist[i] = RandStringBytesRmndr(rand.Int() % 256)
+	}
+	for i, s := range datalist {
+		wg.Add(1)
+		go func(idx int, data string) {
+			defer wg.Done()
+			x.WriteFrame(idx, NewPageFrame([]byte(data)))
+		}(i, s)
+	}
+	for i, s := range datalist {
+		wg.Add(1)
+		go func(idx int, data string) {
+			defer wg.Done()
+			f, err := x.ReadFrame(idx)
+			assert.Nil(t, err)
+			assert.Equal(t, string(f.frame), data)
+
+		}(i, s)
+	}
+	wg.Wait()
+
 }

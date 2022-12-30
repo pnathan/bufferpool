@@ -1,6 +1,7 @@
 package bufferpool
 
 import (
+	"fmt"
 	"sync"
 )
 
@@ -22,6 +23,7 @@ type FramePool interface {
 type MockPool struct {
 	frames map[int]*PageFrame
 	size   int
+	m      sync.RWMutex
 }
 
 func NewMockPool(size int) *MockPool {
@@ -38,27 +40,41 @@ func NewMockPool(size int) *MockPool {
 }
 
 func (o *MockPool) AssessSize() (int, error) {
+	o.m.RLock()
+	defer o.m.RUnlock()
 	return len(o.frames), nil
 }
 
 func (o *MockPool) Size() int {
+	o.m.RLock()
+	defer o.m.RUnlock()
 	return len(o.frames)
 }
 
 func (o *MockPool) ReadFrame(idx int) (*PageFrame, error) {
-	return o.frames[idx], nil
+	o.m.RLock()
+	defer o.m.RUnlock()
+	val, ok := o.frames[idx]
+	if !ok {
+		return nil, fmt.Errorf("%d not in pool", idx)
+	}
+	return val, nil
 }
 
 func (o *MockPool) WriteFrame(idx int, pg *PageFrame) error {
+	o.m.Lock()
+	defer o.m.Unlock()
 	o.frames[idx] = pg
 	return nil
 }
 
 func (o *MockPool) Falloc(count int) error {
+	o.m.Lock()
+	defer o.m.Unlock()
 	prior := o.size
 	for i := 0; i < count; i++ {
 		pageid := prior + i
-		o.WriteFrame(pageid, NewPageFrame([]byte{}))
+		o.frames[pageid] = NewPageFrame([]byte{})
 	}
 	o.size += count
 
