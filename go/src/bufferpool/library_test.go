@@ -52,6 +52,7 @@ func TestMultiThreadedMockPool(t *testing.T) {
 			x.WriteFrame(idx, NewPageFrame([]byte(data)))
 		}(i, s)
 	}
+	wg.Wait()
 	for i, s := range datalist {
 		wg.Add(1)
 		go func(idx int, data string) {
@@ -63,5 +64,37 @@ func TestMultiThreadedMockPool(t *testing.T) {
 		}(i, s)
 	}
 	wg.Wait()
+
+}
+
+func TestDiskPoolSizing(t *testing.T) {
+	td := t.TempDir()
+	dp, err := NewDiskPool(4, td)
+	assert.Nil(t, err)
+	assert.Equal(t, 4, dp.Size())
+	sz, err := dp.AssessSize()
+	assert.Nil(t, err)
+	assert.Equal(t, 4, sz)
+
+	dp2, err := NewDiskPool(0, td)
+
+	assert.Equal(t, 0, dp2.Size())
+
+	sz2, err := dp2.AssessSize()
+	assert.Nil(t, err)
+	assert.Equal(t, 4, sz2)
+	assert.Equal(t, 4, dp2.Size())
+
+}
+
+func TestDiskPoolRWSimple(t *testing.T) {
+	td := t.TempDir()
+	dp, err := NewDiskPool(4, td)
+	assert.Nil(t, err)
+	dp.WriteFrame(0, NewPageFrame([]byte("abc")))
+	f, err := dp.ReadFrame(0)
+	assert.Nil(t, err)
+	assert.Equal(t, string(f.DataClone()), "abc")
+	assert.Equal(t, string(f.frame), "abc")
 
 }

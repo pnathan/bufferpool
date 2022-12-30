@@ -1,7 +1,14 @@
 package bufferpool
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
+	"io/ioutil"
+	"log"
+	"os"
+	"path"
+	"strings"
 	"sync"
 )
 
@@ -81,6 +88,99 @@ func (o *MockPool) Falloc(count int) error {
 	return nil
 }
 
+type DiskPool struct {
+	loadedFrames map[int]*PageFrame
+	knownSize    int
+	path         string
+	m            sync.RWMutex
+}
+
+// NewDiskPool locates the directory path; if the directory doesn't
+// exist, error.  Then, Falloc is called on limit, which will ensure
+// at least `limit` frames are created. If those frames exist already,
+// they are not recreated.
+func NewDiskPool(limit int, directoryPath string) (*DiskPool, error) {
+	s, err := os.Stat(directoryPath)
+	if err != nil {
+		return nil, err
+	}
+	if !s.IsDir() {
+		return nil, fmt.Errorf("%s is not a directory", directoryPath)
+	}
+
+	dp := &DiskPool{
+		loadedFrames: map[int]*PageFrame{},
+		knownSize:    0,
+		path:         directoryPath,
+	}
+	err = dp.Falloc(limit)
+	if err != nil {
+		return nil, err
+	}
+	return dp, nil
+}
+
+func (o *DiskPool) Size() int {
+	return o.knownSize
+}
+
+func (o *DiskPool) AssessSize() (int, error) {
+	files, err := ioutil.ReadDir(o.path)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	count := 0
+	for _, file := range files {
+		if strings.HasPrefix(file.Name(), "page_") {
+			count++
+		}
+	}
+	o.knownSize = count
+	return o.knownSize, nil
+}
+
+func (o *DiskPool) Falloc(limit int) error {
+	priorSize := o.knownSize
+	for i := 0; i < limit; i++ {
+		pageId := priorSize + i
+		filename := path.Join(o.path, fmt.Sprintf("page_%d", pageId))
+		fh, err := os.Open(filename)
+		if err != nil {
+			if errors.Is(err, fs.ErrNotExist) {
+				os.WriteFile(filename, []byte{}, 0600)
+			} else {
+				return err
+			}
+
+		}
+		fh.Close()
+
+	}
+	o.knownSize += limit
+	return nil
+}
+func (o *DiskPool) ReadFrame(idx int) (*PageFrame, error) {
+	if idx > o.knownSize {
+		return nil, fmt.Errorf("frame index too large: %d", idx)
+	}
+	filename := path.Join(o.path, fmt.Sprintf("page_%d", idx))
+	b, err := os.ReadFile(filename)
+	if err != nil {
+		return nil, err
+	}
+	return NewPageFrame(b), nil
+}
+
+func (o *DiskPool) WriteFrame(idx int, pf *PageFrame) error {
+	if idx > o.knownSize {
+		return fmt.Errorf("frame index too large: %d", idx)
+	}
+	filename := path.Join(o.path, fmt.Sprintf("page_%d", idx))
+	os.WriteFile(filename, pf.frame, 0600)
+	return nil
+}
+
 type Evictor interface {
 	// This SHOULD be the signature. But Go is brain-damaged.
 	//Evict(PageFrame, map[PageFrame]int, UniqueStack[int]) error
@@ -102,12 +202,9 @@ func (o BottomEvictor) Evict(pf *PageFrame, pf_idx map[int]int, lru *UniqueStack
 
 }
 
-type DiskPool struct {
-}
-
 type PageFrame struct {
 	// Does the mutex belong here? probably.
-	m     sync.Mutex
+	m     sync.RWMutex
 	frame []byte
 	pins  int
 	dirty bool
@@ -119,6 +216,18 @@ func NewPageFrame(b []byte) *PageFrame {
 		pins:  0,
 		dirty: false,
 	}
+}
+
+// DataClone returns a copy of the underlying data. Mutations of the
+// returned data will not affect the underlying data.
+func (o *PageFrame) DataClone() []byte {
+	o.m.RLock()
+	defer o.m.RUnlock()
+	copy := make([]byte, len(o.frame))
+	for i := 0; i < len(o.frame); i++ {
+		copy[i] = o.frame[i]
+	}
+	return copy
 }
 
 func (o *PageFrame) IncPin() {
@@ -147,13 +256,22 @@ func (o *PageFrame) IsDirty() bool {
 
 // WithRead - Pass the data into the passed-in function.  The function
 // should not be able to return errors, etc. That is, it should be a
-// pure function with respect to the page frame.
+// pure function with respect to the page frame. DataClone should be
+// used if the result is expected to be modified.
 func (o *PageFrame) WithRead(f func([]byte)) {
+	o.m.RLock()
+	defer o.m.RUnlock()
+	f(o.frame)
+}
 
+// WithWrite - Takes a write lock, sets the Dirty bit, passes the
+// internal data in, and the operating function is error-able. Use for
+// mutating operations.
+func (o *PageFrame) WithWrite(f func([]byte) error) error {
 	o.m.Lock()
 	defer o.m.Unlock()
-
-	f(o.frame)
+	o.dirty = true
+	return f(o.frame)
 }
 
 type BufferPoolId = int
