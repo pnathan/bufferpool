@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"io/ioutil"
 	"log"
+	"math/rand"
 	"os"
 	"path"
 	"strings"
@@ -221,7 +222,7 @@ func (o *PageFrame) DecPin() {
 	o.pins -= 1
 }
 
-func (o *PageFrame) Pin() int {
+func (o *PageFrame) Pins() int {
 	o.m.Lock()
 	defer o.m.Unlock()
 	return o.pins
@@ -255,33 +256,48 @@ func (o *PageFrame) WithWrite(f func([]byte) error) error {
 
 type Evictor interface {
 	// This SHOULD be the signature. But Go is brain-damaged.
-	//Evict(PageFrame, map[PageFrame]int, UniqueStack[int]) error
-	Evict(*PageFrame, map[int]int, *UniqueStack[int]) error
+	//Evict(PageFrame, map[PageFrame]int, UniqueStack[int]) Result[int]
+	Evict([]*PageFrame, map[int]int, *UniqueStack[int]) (int, error)
 }
 
 type RandomEvictor struct{}
 
-func (o RandomEvictor) Evict(pf *PageFrame, pf_idx map[int]int, lru *UniqueStack[int]) error {
-	// todo
-	return nil
+func (o RandomEvictor) Evict(pages []*PageFrame, _ map[FramePoolId]BufferPoolId, _ *UniqueStack[int]) (int, error) {
+	potential := rand.Int() % (len(pages) - 1)
+	for true {
+		if pages[potential].Pins() > 0 {
+			potential = rand.Int() % (len(pages) - 1)
+		} else {
+			break
+		}
+	}
+	return potential, nil
 }
 
 type BottomEvictor struct{}
 
-func (o BottomEvictor) Evict(pf *PageFrame, pf_idx map[int]int, lru *UniqueStack[int]) error {
-	// todo
-	return nil
+func (o BottomEvictor) Evict(pages []*PageFrame, pf_idx map[FramePoolId]BufferPoolId, lru *UniqueStack[BufferPoolId]) (BufferPoolId, error) {
+	pageid := lru.Bottom()
+	for _, e := range pf_idx {
+		n
+		if pf_idx[e] == pageid {
+			return e, nil
+		}
+	}
+	return 0, fmt.Errorf("state incoherence error in eviction: unable to find selected lru pageid in pages")
 
 }
 
+// This indexes into the buffer pool, which is a small pool.
 type BufferPoolId = int
 
+// This can be considered to be the oid of the frame.
 type FramePoolId = int
 
 type BufferPool struct {
 	size               int
 	pages              []*PageFrame
-	activePages        map[BufferPoolId]FramePoolId
+	activePages        map[BufferPoolId]*PageFrame
 	reverseActivePages map[FramePoolId]BufferPoolId
 	lru                *UniqueStack[int]
 	pool               FramePool
@@ -292,10 +308,22 @@ func NewBufferPool(size int, pool FramePool, evictor Evictor) *BufferPool {
 	return &BufferPool{
 		size:               size,
 		pages:              []*PageFrame{},
-		activePages:        map[BufferPoolId]FramePoolId{},
+		activePages:        map[BufferPoolId]*PageFrame{},
 		reverseActivePages: map[FramePoolId]BufferPoolId{},
 		lru:                NewUniqueStack[int](),
 		pool:               pool,
 		evictor:            evictor,
 	}
+}
+
+func (o *BufferPool) ReleasePage(idx BufferPoolId) error {
+	if idx > o.size {
+		return fmt.Errorf("index out of range: %d", idx)
+	}
+	_, ok := o.activePages[idx]
+	if !ok {
+		return fmt.Errorf("not valid page: %d", idx)
+	}
+	o.activePages[idx].DecPin()
+	return nil
 }
