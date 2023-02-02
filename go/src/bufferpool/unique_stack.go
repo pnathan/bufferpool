@@ -16,7 +16,7 @@ type UniqueStack[K comparable] struct {
 	Order []K
 	// TODO: move the mutex to a variable to be inaccessible and
 	// the API fully thread-safe
-	sync.RWMutex
+	m sync.RWMutex
 }
 
 func NewUniqueStack[K comparable]() *UniqueStack[K] {
@@ -28,14 +28,14 @@ func NewUniqueStack[K comparable]() *UniqueStack[K] {
 }
 
 func (o *UniqueStack[K]) Length() int {
-	o.RLock()
-	defer o.RUnlock()
+	o.m.RLock()
+	defer o.m.RUnlock()
 	return len(o.Order)
 }
 
 func (o *UniqueStack[K]) Push(e K) {
-	o.Lock()
-	defer o.Unlock()
+	o.m.Lock()
+	defer o.m.Unlock()
 	if _, ok := o.Data[e]; !ok {
 		// Don't have. Push onto the top
 		o.Order = append(o.Order, e)
@@ -56,9 +56,14 @@ func (o *UniqueStack[K]) Push(e K) {
 	}
 }
 
+func (o *UniqueStack[K]) Delete(e K) {
+	// TODO
+	panic("omg!")
+}
+
 func (o *UniqueStack[K]) Pop() K {
-	o.Lock()
-	defer o.Unlock()
+	o.m.Lock()
+	defer o.m.Unlock()
 	sz := len(o.Order)
 	end := o.Order[sz-1]
 	delete(o.Data, end)
@@ -67,13 +72,13 @@ func (o *UniqueStack[K]) Pop() K {
 }
 
 func (o *UniqueStack[K]) Top() K {
-	o.RLock()
-	defer o.RUnlock()
+	o.m.RLock()
+	defer o.m.RUnlock()
 	return o.Order[len(o.Order)-1]
 }
 
 func (o *UniqueStack[K]) Bottom() K {
-	o.RLock()
-	defer o.RUnlock()
+	o.m.RLock()
+	defer o.m.RUnlock()
 	return o.Order[0]
 }

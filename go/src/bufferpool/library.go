@@ -44,7 +44,6 @@ func NewMockPool(size int) *MockPool {
 	}
 
 	return mp
-
 }
 
 func (o *MockPool) AssessSize() (int, error) {
@@ -234,6 +233,18 @@ func (o *PageFrame) IsDirty() bool {
 	return o.dirty
 }
 
+func (o *PageFrame) Undirty() {
+	o.m.Lock()
+	defer o.m.Unlock()
+	o.dirty = false
+}
+
+func (o *PageFrame) SetDirty() {
+	o.m.Lock()
+	defer o.m.Unlock()
+	o.dirty = true
+}
+
 // WithRead - Pass the data into the passed-in function.  The function
 // should not be able to return errors, etc. That is, it should be a
 // pure function with respect to the page frame. DataClone should be
@@ -279,7 +290,6 @@ type BottomEvictor struct{}
 func (o BottomEvictor) Evict(pages []*PageFrame, pf_idx map[FramePoolId]BufferPoolId, lru *UniqueStack[BufferPoolId]) (BufferPoolId, error) {
 	pageid := lru.Bottom()
 	for _, e := range pf_idx {
-		n
 		if pf_idx[e] == pageid {
 			return e, nil
 		}
@@ -295,20 +305,31 @@ type BufferPoolId = int
 type FramePoolId = int
 
 type BufferPool struct {
-	size               int
-	pages              []*PageFrame
-	activePages        map[BufferPoolId]*PageFrame
+	// Size of BufferPool. Constant for pool duration.
+	// This multiplexes onto the Framepool.
+	size int
+	// List of pages. Indexed by BufferPoolId.
+	// len(pages) == size
+	pages []*PageFrame
+	// activePages maps the page ids to framepool ids.
+	activePages map[BufferPoolId]FramePoolId
+	// reverseActivePages maps the frame pool ids [0-size) to
+	// BufferPoolIds. Not all framepool ids are valid
+	// BufferPoolIds - the range is sparse
 	reverseActivePages map[FramePoolId]BufferPoolId
-	lru                *UniqueStack[int]
-	pool               FramePool
-	evictor            Evictor
+	// LRU of buffer pool indices
+	lru *UniqueStack[BufferPoolId]
+	// FramePool that handles permanence
+	pool FramePool
+	// evictor, a pluggable system.
+	evictor Evictor
 }
 
 func NewBufferPool(size int, pool FramePool, evictor Evictor) *BufferPool {
 	return &BufferPool{
 		size:               size,
 		pages:              []*PageFrame{},
-		activePages:        map[BufferPoolId]*PageFrame{},
+		activePages:        map[BufferPoolId]FramePoolId{},
 		reverseActivePages: map[FramePoolId]BufferPoolId{},
 		lru:                NewUniqueStack[int](),
 		pool:               pool,
@@ -316,14 +337,87 @@ func NewBufferPool(size int, pool FramePool, evictor Evictor) *BufferPool {
 	}
 }
 
-func (o *BufferPool) ReleasePage(idx BufferPoolId) error {
+func (o *BufferPool) ReleasePage(idx FramePoolId) error {
 	if idx > o.size {
 		return fmt.Errorf("index out of range: %d", idx)
 	}
-	_, ok := o.activePages[idx]
+	pageIdx, ok := o.reverseActivePages[idx]
 	if !ok {
 		return fmt.Errorf("not valid page: %d", idx)
 	}
-	o.activePages[idx].DecPin()
+	o.pages[pageIdx].DecPin()
 	return nil
+}
+
+// AcquirePage - page is acquired from its data source, if need be
+func (o *BufferPool) AcquirePage(idx FramePoolId) (*PageFrame, error) {
+	p, err := o.GetPage(idx)
+	if err != nil {
+		return nil, err
+	}
+	p.IncPin()
+	return p, nil
+
+}
+
+func (o *BufferPool) GetPage(idx FramePoolId) (*PageFrame, error) {
+	if idx > o.pool.Size() - -1 {
+		return nil, fmt.Errorf("bufferpool index out of range %d", idx)
+	}
+
+	_, ok := o.activePages[idx]
+	// if we don't have the page loaded...
+	if !ok {
+		// if we are full...
+		if len(o.activePages) == o.size {
+
+			victimIndex, err := o.evictor.Evict(o.pages,
+				o.reverseActivePages, o.lru)
+			if err != nil {
+				return nil, err
+			}
+			victimPageId := o.reverseActivePages[victimIndex]
+			if o.pages[victimIndex].IsDirty() {
+				o.pool.WriteFrame(victimPageId, o.pages[victimIndex])
+			}
+			o.pages[victimIndex] = nil
+			delete(o.activePages, victimPageId)
+			delete(o.reverseActivePages, victimIndex)
+			o.lru.Delete(victimPageId)
+
+			// postcondition: we have one empty slot
+		}
+		var target_index *int
+		for i := 0; i < o.size; i++ {
+			if o.pages[i] == nil {
+				target_index = &i
+			}
+		}
+		frame, err := o.pool.ReadFrame(idx)
+		if err != nil {
+			return nil, err
+		}
+		o.pages[*target_index] = frame
+		o.activePages[*target_index] = idx
+		o.reverseActivePages[idx] = *target_index
+		//postcondition: the idx loaded and in the slot
+	}
+	o.lru.Push(idx)
+	return o.pages[o.reverseActivePages[idx]], nil
+}
+
+func (o *BufferPool) SetPageData(idx FramePoolId, data []byte) {
+
+}
+
+func (o *BufferPool) fsync_item(idx FramePoolId) {
+	if o.activePages[idx].IsDirty() {
+		o.pool.WriteFrame(idx, o.activePages[idx])
+		o.activePages[idx].IsDirty()
+	}
+}
+func (o *BufferPool) FSync() {
+	for _, e := range o.activePages {
+		go o.fsync_item(i)
+	}
 }
