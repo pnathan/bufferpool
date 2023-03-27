@@ -175,3 +175,53 @@ func TestBufferPool_FSync(t *testing.T) {
 
 	assert.Nil(t, err)
 }
+
+// this is a test for the Evict method of the BottomEvictor, which should always take the bottom of the UniqueStack[BufferPoolId]
+func TestBottomEvictor_Evict(t *testing.T) {
+	// create a new BottomEvictor
+	b := BottomEvictor{}
+	// create a new UniqueStack
+	us := NewUniqueStack[BufferPoolId]()
+	pfi := map[FramePoolId]BufferPoolId{}
+	// add 3 BufferPoolId's to the UniqueStack
+	for i := 0; i < 3; i++ {
+		us.Push(BufferPoolId(i))
+		pfi[100+i] = i
+	}
+	// create empty page frame list
+	pfl := make([]*PageFrame, 0)
+
+	// call the Evict method on the BottomEvictor
+	// Note that Evict returns a victim, it does not remove the victim
+	victim, err := b.Evict(pfl, pfi, us)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// check that the victim is the bottom of the UniqueStack
+	assert.Equal(t, us.Bottom(), victim)
+	// Check if it *should* be the bottom.
+	assert.Equal(t, BufferPoolId(0), victim)
+	assert.Nil(t, us.Delete(victim))
+
+	data := us.OrderedRead()
+	// data is equal to 1,2
+	assert.Equal(t, []BufferPoolId{1, 2}, data)
+
+	// Add another to the Top
+	us.Push(BufferPoolId(3))
+	pfi[1003] = 3
+
+	// add a previously used buffer
+	us.Push(BufferPoolId(1))
+	// Assert: we should have 2 as the victim.
+	// 1 is the top, followed by 3, followed by 2
+	assert.Equal(t, BufferPoolId(2), us.Bottom())
+	t.Logf("us: %v", us.OrderedRead())
+	t.Logf("pfi: %v", pfi)
+	victim, err = b.Evict(pfl, pfi, us)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assert.Equal(t, us.Bottom(), victim)
+
+}

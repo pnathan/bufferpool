@@ -1,6 +1,9 @@
 package bufferpool
 
-import "sync"
+import (
+	"fmt"
+	"sync"
+)
 
 // / UniqueStack is a Priority Queue / Stack that has a Uniqueness property.
 // / Internally this is implemented by ~ 2*n elements
@@ -25,6 +28,19 @@ func NewUniqueStack[K comparable]() *UniqueStack[K] {
 		Order: []K{},
 	}
 
+}
+
+// With takes a *UniqueStack, a new element, and returns a new *UniqueStack with the new element.
+func (o *UniqueStack[K]) With(e K) *UniqueStack[K] {
+	o.Push(e)
+	return o
+}
+
+// OrderedRead returns the elements in the stack in order from bottom to top.
+func (o *UniqueStack[K]) OrderedRead() []K {
+	o.m.RLock()
+	defer o.m.RUnlock()
+	return o.Order
 }
 
 func (o *UniqueStack[K]) Length() int {
@@ -56,9 +72,33 @@ func (o *UniqueStack[K]) Push(e K) {
 	}
 }
 
-func (o *UniqueStack[K]) Delete(e K) {
-	// TODO
-	panic("omg!")
+// Deletes e from the UniqueStack o. The order is stable.
+func (o *UniqueStack[K]) Delete(e K) error {
+	o.m.Lock()
+	defer o.m.Unlock()
+	if _, ok := o.Data[e]; ok {
+		// Do have. Delete from current location, move to top.
+		// Precondition for success: the element is in o.Order
+		var idx *int
+		idx = new(int)
+		*idx = 0
+		for i := 0; i < len(o.Order); i++ {
+			if o.Order[i] == e {
+				*idx = i
+				break
+			}
+		}
+		// inconsistency check; if existed in Data but not Order...
+		if idx == nil {
+			return fmt.Errorf("significant inconsistency error: element %v not found in stack", e)
+		}
+
+		o.Order = append(o.Order[:*idx], o.Order[*idx+1:]...)
+		delete(o.Data, e)
+	} else {
+		return fmt.Errorf("element %v not found in stack", e)
+	}
+	return nil
 }
 
 func (o *UniqueStack[K]) Pop() K {

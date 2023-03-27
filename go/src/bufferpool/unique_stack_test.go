@@ -1,6 +1,7 @@
 package bufferpool
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -46,4 +47,57 @@ func TestHappyPathUniqueStack(t *testing.T) {
 	assert.Equal(t, us.Length(), 0)
 	us.Push(100)
 	assert.Equal(t, us.Length(), 1)
+}
+
+func TestUniqueStack_Delete(t *testing.T) {
+
+	type testCase[K comparable] struct {
+		name    string
+		o       *UniqueStack[K]
+		args    K
+		wantErr assert.ErrorAssertionFunc
+	}
+	tests := []testCase[int]{
+		{
+			name:    "Empty",
+			o:       NewUniqueStack[int](),
+			args:    1,
+			wantErr: assert.Error,
+		},
+		{
+			name:    "One",
+			o:       NewUniqueStack[int]().With(1),
+			args:    1,
+			wantErr: assert.NoError,
+		},
+		{
+			name:    "One and doesn't have",
+			o:       NewUniqueStack[int]().With(2),
+			args:    1,
+			wantErr: assert.Error,
+		},
+		{
+			name:    "Two and has",
+			o:       NewUniqueStack[int]().With(1).With(2),
+			args:    2,
+			wantErr: assert.NoError,
+		},
+		{
+			name:    "Two and doesn't have",
+			o:       NewUniqueStack[int]().With(1).With(2).With(3).With(4).With(5),
+			args:    -1,
+			wantErr: assert.Error,
+		},
+		{
+			name:    "Five",
+			o:       NewUniqueStack[int]().With(1).With(2).With(3).With(4).With(5),
+			args:    5,
+			wantErr: assert.NoError,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tt.wantErr(t, tt.o.Delete(tt.args), fmt.Sprintf("Delete(%v)", tt.args))
+		})
+	}
 }

@@ -167,7 +167,7 @@ func (o *DiskPool) Falloc(limit int) error {
 			}
 
 		}
-		fh.Close()
+		_ = fh.Close()
 	}
 	o.knownPageCount += limit
 	return nil
@@ -283,21 +283,18 @@ func (pf *PageFrame) WithWrite(f func(*[]byte) error) error {
 	pf.m.Lock()
 	defer pf.m.Unlock()
 	pf.dirty = true
-	fmt.Fprintf(os.Stderr, "previous frame: %v\n", string(pf.frame))
-	e := f(&pf.frame)
-	fmt.Fprintf(os.Stderr, "new frame: %v\n", string(pf.frame))
-	return e
+	return f(&pf.frame)
 }
 
 type Evictor interface {
-	// This SHOULD be the signature. But Go is brain-damaged.
-	// Evict(PageFrame, map[PageFrame]int, UniqueStack[int]) Result[int]
-	Evict([]*PageFrame, map[int]int, *UniqueStack[int]) (int, error)
+	// Evict selects a victim BufferPoolId candidate and returns it.
+	// Evict does not delete from the lru; Evict is stateless.
+	Evict(pages []*PageFrame, pageFrameIndex map[FramePoolId]BufferPoolId, lru *UniqueStack[BufferPoolId]) (BufferPoolId, error)
 }
 
 type RandomEvictor struct{}
 
-func (o RandomEvictor) Evict(pages []*PageFrame, _ map[FramePoolId]BufferPoolId, _ *UniqueStack[int]) (int, error) {
+func (o RandomEvictor) Evict(pages []*PageFrame, _ map[FramePoolId]BufferPoolId, _ *UniqueStack[BufferPoolId]) (BufferPoolId, error) {
 	potential := rand.Int() % (len(pages) - 1)
 	for true {
 		if pages[potential].Pins() > 0 {
@@ -311,15 +308,14 @@ func (o RandomEvictor) Evict(pages []*PageFrame, _ map[FramePoolId]BufferPoolId,
 
 type BottomEvictor struct{}
 
-func (o BottomEvictor) Evict(pages []*PageFrame, pf_idx map[FramePoolId]BufferPoolId, lru *UniqueStack[BufferPoolId]) (BufferPoolId, error) {
-	pageid := lru.Bottom()
-	for _, e := range pf_idx {
-		if pf_idx[e] == pageid {
-			return e, nil
+func (o BottomEvictor) Evict(_ []*PageFrame, pfIdx map[FramePoolId]BufferPoolId, lru *UniqueStack[BufferPoolId]) (BufferPoolId, error) {
+	pageId := lru.Bottom()
+	for k, v := range pfIdx {
+		if v == pageId {
+			return k, nil
 		}
 	}
-	return 0, fmt.Errorf("state incoherence error in eviction: unable to find selected lru pageid in pages")
-
+	return -1, fmt.Errorf("state incoherence error in eviction: unable to find selected lru pageId (%v) in pages", pageId)
 }
 
 // BufferPoolId  indexes into the buffer framePool, which is a small framePool.
@@ -404,6 +400,7 @@ func (bp *BufferPool) GetPage(idx FramePoolId) (*PageFrame, error) {
 		// if we are full...
 		if len(bp.activePages) == bp.size {
 
+			// TYPE ERRORS
 			victimIndex, err := bp.evictor.Evict(bp.pages,
 				bp.reverseActivePages, bp.lru)
 			if err != nil {
