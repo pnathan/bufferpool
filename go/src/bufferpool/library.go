@@ -34,13 +34,17 @@ type MockPool struct {
 	m      sync.RWMutex
 }
 
+// NewMockPool creates a new MockPool with a given size, or nil if unable to allocate (very surprising), such sus.
 func NewMockPool(size int) *MockPool {
 	mp := &MockPool{
 		frames: map[int]*PageFrame{},
 		size:   0,
 	}
 	if size > 0 {
-		mp.Falloc(size)
+		err := mp.Falloc(size)
+		if err != nil {
+			return nil
+		}
 	}
 
 	return mp
@@ -63,7 +67,7 @@ func (o *MockPool) ReadFrame(idx int) (*PageFrame, error) {
 	defer o.m.RUnlock()
 	val, ok := o.frames[idx]
 	if !ok {
-		return nil, fmt.Errorf("%d not in pool", idx)
+		return nil, fmt.Errorf("%d not in framePool", idx)
 	}
 	return val, nil
 }
@@ -89,10 +93,10 @@ func (o *MockPool) Falloc(count int) error {
 }
 
 type DiskPool struct {
-	loadedFrames map[int]*PageFrame
-	knownSize    int
-	path         string
-	m            sync.RWMutex
+	loadedFrames   map[int]*PageFrame
+	knownPageCount int
+	path           string
+	m              sync.RWMutex
 }
 
 // NewDiskPool locates the directory path; if the directory doesn't
@@ -109,9 +113,9 @@ func NewDiskPool(limit int, directoryPath string) (*DiskPool, error) {
 	}
 
 	dp := &DiskPool{
-		loadedFrames: map[int]*PageFrame{},
-		knownSize:    0,
-		path:         directoryPath,
+		loadedFrames:   map[int]*PageFrame{},
+		knownPageCount: 0,
+		path:           directoryPath,
 	}
 	err = dp.Falloc(limit)
 	if err != nil {
@@ -121,7 +125,7 @@ func NewDiskPool(limit int, directoryPath string) (*DiskPool, error) {
 }
 
 func (o *DiskPool) Size() int {
-	return o.knownSize
+	return o.knownPageCount
 }
 
 func (o *DiskPool) AssessSize() (int, error) {
@@ -136,35 +140,43 @@ func (o *DiskPool) AssessSize() (int, error) {
 			count++
 		}
 	}
-	o.knownSize = count
-	return o.knownSize, nil
+	o.knownPageCount = count
+	return o.knownPageCount, nil
 }
 
+// Name of page the Disk Pool Uses
+func (o *DiskPool) PageFileName(idx int) string {
+	return path.Join(o.path, fmt.Sprintf("page_%d", idx))
+}
+
+// Falloc creates `limit` more frames in the DiskPool directory.
 func (o *DiskPool) Falloc(limit int) error {
-	priorSize := o.knownSize
+	priorSize := o.knownPageCount
 	for i := 0; i < limit; i++ {
 		pageId := priorSize + i
-		filename := path.Join(o.path, fmt.Sprintf("page_%d", pageId))
+		filename := o.PageFileName(pageId)
 		fh, err := os.Open(filename)
 		if err != nil {
 			if errors.Is(err, fs.ErrNotExist) {
-				os.WriteFile(filename, []byte{}, 0600)
+				err := os.WriteFile(filename, []byte{}, 0600)
+				if err != nil {
+					return err
+				}
 			} else {
 				return err
 			}
 
 		}
 		fh.Close()
-
 	}
-	o.knownSize += limit
+	o.knownPageCount += limit
 	return nil
 }
 func (o *DiskPool) ReadFrame(idx int) (*PageFrame, error) {
-	if idx > o.knownSize {
+	if idx > o.knownPageCount {
 		return nil, fmt.Errorf("frame index too large: %d", idx)
 	}
-	filename := path.Join(o.path, fmt.Sprintf("page_%d", idx))
+	filename := o.PageFileName(idx)
 	b, err := os.ReadFile(filename)
 	if err != nil {
 		return nil, err
@@ -173,20 +185,29 @@ func (o *DiskPool) ReadFrame(idx int) (*PageFrame, error) {
 }
 
 func (o *DiskPool) WriteFrame(idx int, pf *PageFrame) error {
-	if idx > o.knownSize {
+	if idx > o.knownPageCount {
 		return fmt.Errorf("frame index too large: %d", idx)
 	}
-	filename := path.Join(o.path, fmt.Sprintf("page_%d", idx))
-	os.WriteFile(filename, pf.frame, 0600)
+	o.m.Lock()
+	defer o.m.Unlock()
+	filename := o.PageFileName(idx)
+	err := os.WriteFile(filename, pf.frame, 0600)
+	if err != nil {
+		return err
+	}
 	return nil
 }
 
 type PageFrame struct {
-	// Does the mutex belong here? probably.
-	m     sync.RWMutex
+	// The relevant data.
 	frame []byte
-	pins  int
+	// Pins denotes how many threads the page is being used by.
+	pins int
+	// Dirty denotes if the frame has been modified.
 	dirty bool
+	// Whenever anything in the struct is read, the mutex is set to RLock.
+	// Whenever anything in the struct is written, the mutex is set to Lock.
+	m sync.RWMutex
 }
 
 func NewPageFrame(b []byte) *PageFrame {
@@ -199,75 +220,78 @@ func NewPageFrame(b []byte) *PageFrame {
 
 // DataClone returns a copy of the underlying data. Mutations of the
 // returned data will not affect the underlying data.
-func (o *PageFrame) DataClone() []byte {
-	o.m.RLock()
-	defer o.m.RUnlock()
-	copy := make([]byte, len(o.frame))
-	for i := 0; i < len(o.frame); i++ {
-		copy[i] = o.frame[i]
+func (pf *PageFrame) DataClone() []byte {
+	pf.m.RLock()
+	defer pf.m.RUnlock()
+	bytes := make([]byte, len(pf.frame))
+	for i := 0; i < len(pf.frame); i++ {
+		bytes[i] = pf.frame[i]
 	}
-	return copy
+	return bytes
 }
 
-func (o *PageFrame) IncPin() {
-	o.m.Lock()
-	defer o.m.Unlock()
-	o.pins += 1
+// IncPin when the data is being used by a thread.
+func (pf *PageFrame) IncPin() {
+	pf.m.Lock()
+	defer pf.m.Unlock()
+	pf.pins += 1
 }
 
-func (o *PageFrame) DecPin() {
-	o.m.Lock()
-	defer o.m.Unlock()
-	o.pins -= 1
+// DecPin when the data is no longer being used by a thread.
+func (pf *PageFrame) DecPin() {
+	pf.m.Lock()
+	defer pf.m.Unlock()
+	pf.pins -= 1
 }
 
-func (o *PageFrame) Pins() int {
-	o.m.Lock()
-	defer o.m.Unlock()
-	return o.pins
+// Pins returns the number of threads using the data.
+func (pf *PageFrame) Pins() int {
+	pf.m.RLock()
+	defer pf.m.RUnlock()
+	return pf.pins
 }
 
-func (o *PageFrame) IsDirty() bool {
-	o.m.Lock()
-	defer o.m.Unlock()
-	return o.dirty
+// IsDirty returns if the data has been modified. No locking performed; use Take/ReleaseLock.
+func (pf *PageFrame) IsDirty() bool {
+	return pf.dirty
 }
 
-func (o *PageFrame) Undirty() {
-	o.m.Lock()
-	defer o.m.Unlock()
-	o.dirty = false
+// TakeLock takes the lock for the pageframe
+func (pf *PageFrame) TakeLock() {
+	pf.m.Lock()
 }
 
-func (o *PageFrame) SetDirty() {
-	o.m.Lock()
-	defer o.m.Unlock()
-	o.dirty = true
+// ReleaseLock releases the lock for the pageframe
+func (pf *PageFrame) ReleaseLock() {
+	pf.m.Unlock()
 }
 
 // WithRead - Pass the data into the passed-in function.  The function
 // should not be able to return errors, etc. That is, it should be a
 // pure function with respect to the page frame. DataClone should be
 // used if the result is expected to be modified.
-func (o *PageFrame) WithRead(f func([]byte)) {
-	o.m.RLock()
-	defer o.m.RUnlock()
-	f(o.frame)
+func (pf *PageFrame) WithRead(f func([]byte)) {
+	pf.m.RLock()
+	defer pf.m.RUnlock()
+	f(pf.frame)
 }
 
 // WithWrite - Takes a write lock, sets the Dirty bit, passes the
 // internal data in, and the operating function is error-able. Use for
 // mutating operations.
-func (o *PageFrame) WithWrite(f func([]byte) error) error {
-	o.m.Lock()
-	defer o.m.Unlock()
-	o.dirty = true
-	return f(o.frame)
+func (pf *PageFrame) WithWrite(f func(*[]byte) error) error {
+	pf.m.Lock()
+	defer pf.m.Unlock()
+	pf.dirty = true
+	fmt.Fprintf(os.Stderr, "previous frame: %v\n", string(pf.frame))
+	e := f(&pf.frame)
+	fmt.Fprintf(os.Stderr, "new frame: %v\n", string(pf.frame))
+	return e
 }
 
 type Evictor interface {
 	// This SHOULD be the signature. But Go is brain-damaged.
-	//Evict(PageFrame, map[PageFrame]int, UniqueStack[int]) Result[int]
+	// Evict(PageFrame, map[PageFrame]int, UniqueStack[int]) Result[int]
 	Evict([]*PageFrame, map[int]int, *UniqueStack[int]) (int, error)
 }
 
@@ -298,14 +322,14 @@ func (o BottomEvictor) Evict(pages []*PageFrame, pf_idx map[FramePoolId]BufferPo
 
 }
 
-// This indexes into the buffer pool, which is a small pool.
+// BufferPoolId  indexes into the buffer framePool, which is a small framePool.
 type BufferPoolId = int
 
-// This can be considered to be the oid of the frame.
+// FramePoolId can be considered to be the oid of the frame.
 type FramePoolId = int
 
 type BufferPool struct {
-	// Size of BufferPool. Constant for pool duration.
+	// Size of BufferPool. Constant for framePool duration.
 	// This multiplexes onto the Framepool.
 	size int
 	// List of pages. Indexed by BufferPoolId.
@@ -313,111 +337,156 @@ type BufferPool struct {
 	pages []*PageFrame
 	// activePages maps the page ids to framepool ids.
 	activePages map[BufferPoolId]FramePoolId
-	// reverseActivePages maps the frame pool ids [0-size) to
+	// reverseActivePages maps the frame framePool ids [0-size) to
 	// BufferPoolIds. Not all framepool ids are valid
 	// BufferPoolIds - the range is sparse
 	reverseActivePages map[FramePoolId]BufferPoolId
-	// LRU of buffer pool indices
+	// LRU of buffer framePool indices
 	lru *UniqueStack[BufferPoolId]
 	// FramePool that handles permanence
-	pool FramePool
+	framePool FramePool
 	// evictor, a pluggable system.
 	evictor Evictor
+
+	// These two will be set on failures in `defers`
+	failureDetected bool
+	failure         error
 }
 
 func NewBufferPool(size int, pool FramePool, evictor Evictor) *BufferPool {
+	pages := make([]*PageFrame, size)
+	// Probably not required but leaving as is.
+	for i := 0; i < size; i++ {
+		pages[i] = nil
+	}
 	return &BufferPool{
 		size:               size,
-		pages:              []*PageFrame{},
+		pages:              pages,
 		activePages:        map[BufferPoolId]FramePoolId{},
 		reverseActivePages: map[FramePoolId]BufferPoolId{},
 		lru:                NewUniqueStack[int](),
-		pool:               pool,
+		framePool:          pool,
 		evictor:            evictor,
 	}
 }
 
-func (o *BufferPool) ReleasePage(idx FramePoolId) error {
-	if idx > o.size {
+// ReleasePage decrements the pin of `idx`.
+func (bp *BufferPool) ReleasePage(idx FramePoolId) error {
+	if idx > bp.size || idx < 0 {
 		return fmt.Errorf("index out of range: %d", idx)
 	}
-	pageIdx, ok := o.reverseActivePages[idx]
+	pageIdx, ok := bp.reverseActivePages[idx]
 	if !ok {
 		return fmt.Errorf("not valid page: %d", idx)
 	}
-	o.pages[pageIdx].DecPin()
+	bp.pages[pageIdx].DecPin()
 	return nil
 }
 
-// AcquirePage - page is acquired from its data source, if need be
-func (o *BufferPool) AcquirePage(idx FramePoolId) (*PageFrame, error) {
-	p, err := o.GetPage(idx)
+// AcquirePage - page is acquired from its data source, if need be, then the Pin is incremented.
+func (bp *BufferPool) AcquirePage(idx FramePoolId) (*PageFrame, error) {
+	p, err := bp.GetPage(idx)
 	if err != nil {
 		return nil, err
 	}
 	p.IncPin()
 	return p, nil
-
 }
 
-func (o *BufferPool) GetPage(idx FramePoolId) (*PageFrame, error) {
-	if idx > o.pool.Size() - -1 {
+func (bp *BufferPool) GetPage(idx FramePoolId) (*PageFrame, error) {
+	if idx > bp.framePool.Size() - -1 {
 		return nil, fmt.Errorf("bufferpool index out of range %d", idx)
 	}
 
-	_, ok := o.activePages[idx]
+	_, ok := bp.activePages[idx]
 	// if we don't have the page loaded...
 	if !ok {
 		// if we are full...
-		if len(o.activePages) == o.size {
+		if len(bp.activePages) == bp.size {
 
-			victimIndex, err := o.evictor.Evict(o.pages,
-				o.reverseActivePages, o.lru)
+			victimIndex, err := bp.evictor.Evict(bp.pages,
+				bp.reverseActivePages, bp.lru)
 			if err != nil {
 				return nil, err
 			}
-			victimPageId := o.reverseActivePages[victimIndex]
-			if o.pages[victimIndex].IsDirty() {
-				o.pool.WriteFrame(victimPageId, o.pages[victimIndex])
+			victimPageId := bp.reverseActivePages[victimIndex]
+			if bp.pages[victimIndex].IsDirty() {
+				err := bp.framePool.WriteFrame(victimPageId, bp.pages[victimIndex])
+				if err != nil {
+					return nil, err
+				}
 			}
-			o.pages[victimIndex] = nil
-			delete(o.activePages, victimPageId)
-			delete(o.reverseActivePages, victimIndex)
-			o.lru.Delete(victimPageId)
+			bp.pages[victimIndex] = nil
+			delete(bp.activePages, victimPageId)
+			delete(bp.reverseActivePages, victimIndex)
+			bp.lru.Delete(victimPageId)
 
 			// postcondition: we have one empty slot
 		}
 		var target_index *int
-		for i := 0; i < o.size; i++ {
-			if o.pages[i] == nil {
+		for i := 0; i < bp.size; i++ {
+			if bp.pages[i] == nil {
 				target_index = &i
+				break
 			}
 		}
-		frame, err := o.pool.ReadFrame(idx)
+		if target_index == nil {
+			return nil, fmt.Errorf("unable to find empty slot, error, error")
+		}
+		frame, err := bp.framePool.ReadFrame(idx)
 		if err != nil {
 			return nil, err
 		}
-		o.pages[*target_index] = frame
-		o.activePages[*target_index] = idx
-		o.reverseActivePages[idx] = *target_index
+		bp.pages[*target_index] = frame
+		bp.activePages[*target_index] = idx
+		bp.reverseActivePages[idx] = *target_index
 		//postcondition: the idx loaded and in the slot
 	}
-	o.lru.Push(idx)
-	return o.pages[o.reverseActivePages[idx]], nil
+	bp.lru.Push(idx)
+	return bp.pages[bp.reverseActivePages[idx]], nil
 }
 
-func (o *BufferPool) SetPageData(idx FramePoolId, data []byte) {
-
-}
-
-func (o *BufferPool) fsync_item(idx FramePoolId) {
-	if o.activePages[idx].IsDirty() {
-		o.pool.WriteFrame(idx, o.activePages[idx])
-		o.activePages[idx].IsDirty()
+func (bp *BufferPool) WriteFrame(idx FramePoolId, data []byte) error {
+	page, err := bp.AcquirePage(idx)
+	if err != nil {
+		return err
 	}
-}
-func (o *BufferPool) FSync() {
-	for _, e := range o.activePages {
-		go o.fsync_item(i)
+	defer func() {
+		err := bp.ReleasePage(idx)
+		if err != nil {
+			bp.failureDetected = true
+			bp.failure = err
+			return
+		}
+	}()
+	err = page.WithWrite(func(b *[]byte) error {
+		*b = data
+		return nil
+	})
+	if err != nil {
+		return err
 	}
+
+	return nil
+}
+
+func (bp *BufferPool) FSync() error {
+	for _, fpId := range bp.activePages {
+		page := bp.pages[fpId]
+		e := func() error {
+			page.TakeLock()
+			defer page.ReleaseLock()
+			if page.IsDirty() {
+				err := bp.framePool.WriteFrame(fpId, page)
+				if err != nil {
+					return err
+				}
+			}
+			return nil
+		}()
+		if e != nil {
+			return e
+		}
+	}
+	return nil
 }
