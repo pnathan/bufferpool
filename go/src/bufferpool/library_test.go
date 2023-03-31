@@ -2,6 +2,7 @@ package bufferpool
 
 import (
 	"fmt"
+	"io/ioutil"
 	"math/rand"
 	"os"
 	"sync"
@@ -168,10 +169,17 @@ func TestBufferPool_FSync(t *testing.T) {
 	assert.NotNil(t, bp)
 	// Here we write to the buffer pool in each of the 3 frames
 	for i := 0; i < 3; i++ {
-		assert.Nil(t, bp.WriteFrame(i, []byte(fmt.Sprintf("X-%d", i))))
+		assert.Nil(t, bp.WritePage(i, []byte(fmt.Sprintf("X-%d", i))))
 	}
 
 	err = bp.FSync()
+	for i := 0; i < 3; i++ {
+		b, err := ioutil.ReadFile(fmt.Sprintf("%s/page_%d", td, i))
+		if err != nil {
+			t.Fatal(err)
+		}
+		assert.Equal(t, fmt.Sprintf("X-%d", i), string(b))
+	}
 
 	assert.Nil(t, err)
 }
@@ -197,11 +205,10 @@ func TestBottomEvictor_Evict(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// check that the victim is the bottom of the UniqueStack
-	assert.Equal(t, us.Bottom(), victim)
+	assert.Equal(t, pfi[victim], us.Bottom())
 	// Check if it *should* be the bottom.
-	assert.Equal(t, BufferPoolId(0), victim)
-	assert.Nil(t, us.Delete(victim))
+	assert.Equal(t, FramePoolId(100), victim)
+	assert.Nil(t, us.Delete(pfi[victim]))
 
 	data := us.OrderedRead()
 	// data is equal to 1,2
@@ -222,6 +229,14 @@ func TestBottomEvictor_Evict(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	assert.Equal(t, us.Bottom(), victim)
+	assert.Equal(t, us.Bottom(), pfi[victim])
+}
+
+func TestEndGeneralUsageBufferPool(t *testing.T) {
+	d := t.TempDir()
+	bp, err := NewSlab(4, d)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 }

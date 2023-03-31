@@ -289,12 +289,12 @@ func (pf *PageFrame) WithWrite(f func(*[]byte) error) error {
 type Evictor interface {
 	// Evict selects a victim BufferPoolId candidate and returns it.
 	// Evict does not delete from the lru; Evict is stateless.
-	Evict(pages []*PageFrame, pageFrameIndex map[FramePoolId]BufferPoolId, lru *UniqueStack[BufferPoolId]) (BufferPoolId, error)
+	Evict(pages []*PageFrame, pageFrameIndex map[FramePoolId]BufferPoolId, lru *UniqueStack[BufferPoolId]) (FramePoolId, error)
 }
 
 type RandomEvictor struct{}
 
-func (o RandomEvictor) Evict(pages []*PageFrame, _ map[FramePoolId]BufferPoolId, _ *UniqueStack[BufferPoolId]) (BufferPoolId, error) {
+func (o RandomEvictor) Evict(pages []*PageFrame, _ map[FramePoolId]BufferPoolId, _ *UniqueStack[BufferPoolId]) (FramePoolId, error) {
 	potential := rand.Int() % (len(pages) - 1)
 	for true {
 		if pages[potential].Pins() > 0 {
@@ -308,9 +308,9 @@ func (o RandomEvictor) Evict(pages []*PageFrame, _ map[FramePoolId]BufferPoolId,
 
 type BottomEvictor struct{}
 
-func (o BottomEvictor) Evict(_ []*PageFrame, pfIdx map[FramePoolId]BufferPoolId, lru *UniqueStack[BufferPoolId]) (BufferPoolId, error) {
+func (o BottomEvictor) Evict(_ []*PageFrame, frame2Buf map[FramePoolId]BufferPoolId, lru *UniqueStack[BufferPoolId]) (FramePoolId, error) {
 	pageId := lru.Bottom()
-	for k, v := range pfIdx {
+	for k, v := range frame2Buf {
 		if v == pageId {
 			return k, nil
 		}
@@ -331,13 +331,13 @@ type BufferPool struct {
 	// List of pages. Indexed by BufferPoolId.
 	// len(pages) == size
 	pages []*PageFrame
-	// activePages maps the page ids to framepool ids.
-	activePages map[BufferPoolId]FramePoolId
-	// reverseActivePages maps the frame framePool ids [0-size) to
+	// buf2Frame maps the page ids to framepool ids.
+	buf2Frame map[BufferPoolId]FramePoolId
+	// frame2Buf maps the frame framePool ids [0-size) to
 	// BufferPoolIds. Not all framepool ids are valid
 	// BufferPoolIds - the range is sparse
-	reverseActivePages map[FramePoolId]BufferPoolId
-	// LRU of buffer framePool indices
+	frame2Buf map[FramePoolId]BufferPoolId
+	// LRU of buffer indices to framepools
 	lru *UniqueStack[BufferPoolId]
 	// FramePool that handles permanence
 	framePool FramePool
@@ -356,14 +356,95 @@ func NewBufferPool(size int, pool FramePool, evictor Evictor) *BufferPool {
 		pages[i] = nil
 	}
 	return &BufferPool{
-		size:               size,
-		pages:              pages,
-		activePages:        map[BufferPoolId]FramePoolId{},
-		reverseActivePages: map[FramePoolId]BufferPoolId{},
-		lru:                NewUniqueStack[int](),
-		framePool:          pool,
-		evictor:            evictor,
+		size:      size,
+		pages:     pages,
+		buf2Frame: map[BufferPoolId]FramePoolId{},
+		frame2Buf: map[FramePoolId]BufferPoolId{},
+		lru:       NewUniqueStack[int](),
+		framePool: pool,
+		evictor:   evictor,
 	}
+}
+
+// A Slab is a pseudocontiguous chunk of memory overlaying a bufferpool
+type Slab struct {
+	// The bufferpool that this slab is a part of
+	pool *BufferPool
+	// Bytes per stride, for each slot in the bufferpool
+	strideWidth int
+	// The size of the slab
+	size int
+}
+func NewSlab(frameSize int, backingPath string) (*Slab, error) {
+	fp, err := NewDiskPool(frameSize, backingPath)
+	if err != nil {
+		return nil, err
+	}
+	return &Slab{
+		size: 0,
+		strideWidth: 16,
+		pool: NewBufferPool(100, fp, BottomEvictor{}),
+	}, nil
+}
+
+// Put - Writes bytes to index in the slab
+func (slab *Slab) Put(startingIndex int, data []byte) error {
+	// find the starting buffer to write to
+	targetBufferStart := startingIndex/slab.strideWidth
+	targetIndexModulus := startingIndex%slab.strideWidth
+	width := len(data) / slab.strideWidth + 1
+
+	// We acquire a page, write from the starting index to the end of the page, then release the page.
+	// We then acquire the next page, write from the start of the page to the end of the data, then release the page.
+	// We repeat this process until we have written all of the data.
+	data_counter := 0
+	for bufferIndex := targetBufferStart; bufferIndex < targetBufferStart + width; bufferIndex++ {
+		if err := func() error {
+			page, err := slab.pool.AcquirePage(bufferIndex)
+			defer func(){ _ = slab.pool.ReleasePage(bufferIndex) }()
+
+			if err != nil {
+				return err
+			}
+			page.WithWrite(func(d *[]byte) error {
+				for i := bufferIndex * slab.strideWidth ; i < (bufferIndex + 1) * slab.strideWidth && data_counter < len(data); i++ {
+					(*d)[i] = data[data_counter]
+					data_counter++
+				}
+				return nil
+			})
+			return nil
+		}(); err != nil {
+			return err
+		}
+	}
+
+
+
+	for i := target; i < target + width; i++ {
+		bufferIndex := i % slab.strideWidth
+		page, err := slab.pool.AcquirePage(bufferIndex)
+		if err != nil {
+			return err
+		}
+		page.WithWrite(func(d *[]byte) error {
+			*d[] = data
+		})
+		defer func() { _ = slab.pool.ReleasePage(target) }()
+	}
+}
+
+// Get - Gets bytes from index in the slab.
+func (slab *Slab) Get(idx int) ([]byte, error) {
+	if idx > bp.framePool.Size() || idx < 0 {
+		return nil, fmt.Errorf("index out of range: %d", idx)
+	}
+	pf, err := bp.AcquirePage(idx)
+	if err != nil {
+		return nil, err
+	}
+	defer func(){  _ = bp.ReleasePage(idx) }()
+	return pf.DataClone(), nil
 }
 
 // ReleasePage decrements the pin of `idx`.
@@ -371,7 +452,7 @@ func (bp *BufferPool) ReleasePage(idx FramePoolId) error {
 	if idx > bp.size || idx < 0 {
 		return fmt.Errorf("index out of range: %d", idx)
 	}
-	pageIdx, ok := bp.reverseActivePages[idx]
+	pageIdx, ok := bp.frame2Buf[idx]
 	if !ok {
 		return fmt.Errorf("not valid page: %d", idx)
 	}
@@ -394,19 +475,19 @@ func (bp *BufferPool) GetPage(idx FramePoolId) (*PageFrame, error) {
 		return nil, fmt.Errorf("bufferpool index out of range %d", idx)
 	}
 
-	_, ok := bp.activePages[idx]
+	_, ok := bp.buf2Frame[idx]
 	// if we don't have the page loaded...
 	if !ok {
 		// if we are full...
-		if len(bp.activePages) == bp.size {
+		if len(bp.buf2Frame) == bp.size {
 
 			// TYPE ERRORS
 			victimIndex, err := bp.evictor.Evict(bp.pages,
-				bp.reverseActivePages, bp.lru)
+				bp.frame2Buf, bp.lru)
 			if err != nil {
 				return nil, err
 			}
-			victimPageId := bp.reverseActivePages[victimIndex]
+			victimPageId := bp.frame2Buf[victimIndex]
 			if bp.pages[victimIndex].IsDirty() {
 				err := bp.framePool.WriteFrame(victimPageId, bp.pages[victimIndex])
 				if err != nil {
@@ -414,9 +495,12 @@ func (bp *BufferPool) GetPage(idx FramePoolId) (*PageFrame, error) {
 				}
 			}
 			bp.pages[victimIndex] = nil
-			delete(bp.activePages, victimPageId)
-			delete(bp.reverseActivePages, victimIndex)
-			bp.lru.Delete(victimPageId)
+			delete(bp.buf2Frame, victimPageId)
+			delete(bp.frame2Buf, victimIndex)
+			err = bp.lru.Delete(victimPageId)
+			if err != nil {
+				return nil, err
+			}
 
 			// postcondition: we have one empty slot
 		}
@@ -435,15 +519,15 @@ func (bp *BufferPool) GetPage(idx FramePoolId) (*PageFrame, error) {
 			return nil, err
 		}
 		bp.pages[*target_index] = frame
-		bp.activePages[*target_index] = idx
-		bp.reverseActivePages[idx] = *target_index
+		bp.buf2Frame[*target_index] = idx
+		bp.frame2Buf[idx] = *target_index
 		//postcondition: the idx loaded and in the slot
 	}
 	bp.lru.Push(idx)
-	return bp.pages[bp.reverseActivePages[idx]], nil
+	return bp.pages[bp.frame2Buf[idx]], nil
 }
 
-func (bp *BufferPool) WriteFrame(idx FramePoolId, data []byte) error {
+func (bp *BufferPool) WritePage(idx FramePoolId, data []byte) error {
 	page, err := bp.AcquirePage(idx)
 	if err != nil {
 		return err
@@ -468,21 +552,23 @@ func (bp *BufferPool) WriteFrame(idx FramePoolId, data []byte) error {
 }
 
 func (bp *BufferPool) FSync() error {
-	for _, fpId := range bp.activePages {
+	for _, fpId := range bp.buf2Frame {
 		page := bp.pages[fpId]
-		e := func() error {
-			page.TakeLock()
-			defer page.ReleaseLock()
-			if page.IsDirty() {
-				err := bp.framePool.WriteFrame(fpId, page)
-				if err != nil {
-					return err
-				}
-			}
-			return nil
-		}()
+		e := FSyncSlot(page, bp, fpId)
 		if e != nil {
 			return e
+		}
+	}
+	return nil
+}
+
+func FSyncSlot(page *PageFrame, bp *BufferPool, fpId FramePoolId) error {
+	page.TakeLock()
+	defer page.ReleaseLock()
+	if page.IsDirty() {
+		err := bp.framePool.WriteFrame(fpId, page)
+		if err != nil {
+			return err
 		}
 	}
 	return nil
