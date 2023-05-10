@@ -1,17 +1,15 @@
 use rand;
-use rand::{thread_rng, Rng};
+use rand::{Rng, thread_rng};
 use std::collections::HashMap;
 
-use crate::framepool;
-// use crate::framepool::PageFrame;
-use crate::framepool::FramePool;
+use crate::{framepool, pageframe};
 use crate::unique_stack;
 
 type BufferPoolId = u64;
 type FramePoolId = u64;
 
 type EvictorFn<T> = fn(
-    &Vec<Option<framepool::PageFrame<T>>>,
+    &Vec<Option<pageframe::PageFrame<T>>>,
     &unique_stack::UniqueStack<BufferPoolId>,
 ) -> Result<BufferPoolId, BufferPoolErrors>;
 
@@ -33,7 +31,7 @@ impl std::fmt::Display for BufferPoolErrors {
 impl std::error::Error for BufferPoolErrors {}
 
 fn random_evictor<T>(
-    pages: &Vec<Option<framepool::PageFrame<T>>>,
+    pages: &Vec<Option<pageframe::PageFrame<T>>>,
     _: &unique_stack::UniqueStack<BufferPoolId>,
 ) -> Result<BufferPoolId, BufferPoolErrors>
 where
@@ -62,7 +60,7 @@ where
 }
 
 fn bottom_evictor<T>(
-    pages: &Vec<Option<framepool::PageFrame<T>>>,
+    pages: &Vec<Option<pageframe::PageFrame<T>>>,
     lru: &unique_stack::UniqueStack<BufferPoolId>,
 ) -> Result<BufferPoolId, BufferPoolErrors>
 where
@@ -92,7 +90,7 @@ where
     // the pages that are loaded
     // None indicates an unloaded page.
     // BufferPoolIDs index into trhis.
-    pages: Vec<Option<framepool::PageFrame<T>>>,
+    pages: Vec<Option<pageframe::PageFrame<T>>>,
 
     // maps bufferpool ids to framepool ids
     buf2frame: HashMap<BufferPoolId, FramePoolId>,
@@ -145,7 +143,7 @@ where
             .as_ref()
             .ok_or("unable to access index".to_string())?;
         if page.is_dirty() {
-            let x = framepool::PageFrame::new(page.data());
+            let x = pageframe::PageFrame::new(page.data());
             self.frame_pool.write_frame(frame_idx, Box::new(x))?
         }
         Ok(())
@@ -161,7 +159,7 @@ where
     }
 
     // get_page returns a reference to the page at the given underlying index.
-    pub fn get_page(&mut self, frame_idx: FramePoolId) -> Option<&framepool::PageFrame<T>> {
+    pub fn get_page(&mut self, frame_idx: FramePoolId) -> Option<&pageframe::PageFrame<T>> {
         // If this is beyond the size of the backing frame, then we can't get the page.
         if frame_idx > self.frame_pool.size() {
             return None;
@@ -181,7 +179,7 @@ where
 
                     // something says that the reference and cloning logic here is junk.
                     let d = self.pages[victim_idx as usize].as_ref()?;
-                    let x = framepool::PageFrame::new(d.data());
+                    let x = pageframe::PageFrame::new(d.data());
                     self.frame_pool.write_frame(victim_idx, Box::new(x)).ok()?;
                 }
                 // Precondition: the page is not dirty, or we have flushed it.
@@ -213,42 +211,6 @@ where
                 self.pages[b as usize].as_ref()
             }
         }
-    }
-}
-
-struct SlabMapper<'a, T>
-where
-    T: Clone,
-{
-    slab: BufferPool<'a, T>,
-    stride: usize,
-}
-
-impl<'a, T> SlabMapper<'a, T>
-where
-    T: Clone,
-{
-    pub fn new(size: usize, pool: &'a mut dyn framepool::FramePool<T>, stride: usize) -> Self {
-        SlabMapper {
-            slab: BufferPool::new(size, pool, bottom_evictor),
-            stride: stride,
-        }
-    }
-    fn flush(&mut self, seq: Vec<T>) -> Result<(), String> {
-        let required_allocation = seq.len() / self.stride;
-        self.slab
-            .ensure_allocation((required_allocation - 1) as FramePoolId)?;
-        for i in 0..seq.len() {
-            let bottom = i * self.stride;
-            let top = (i + 1) * self.stride + bottom;
-            for j in bottom..top {
-                match self.slab.put_page(i as FramePoolId, seq[j].clone()) {
-                    Ok(_) => (),
-                    Err(e) => return Err(e.to_string()),
-                }
-            }
-        }
-        Ok(())
     }
 }
 
