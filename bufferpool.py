@@ -2,11 +2,15 @@
 # bufferpool.py
 #
 # an implementation of a buffer pool in Python 3.
+# python version: 3.10
 #
 # (C) AGPL3 Paul Nathan 2022
 import json
 import os
 import random
+from collections.abc import Callable
+from typing import Any
+
 
 class UniqueStack(object):
     # A space-inefficient means of having a unique priority queue. A
@@ -27,18 +31,20 @@ class UniqueStack(object):
     def __init__(self):
         self._d = set()
         self._o = []
+
     def push(self, e):
         if e in self._d:
             r = []
             for i in range(0, len(self._o)):
                 if self._o[i] == e:
                     # splice them together without e
-                    r = self._o[:i] + self._o[i+1:]
+                    r = self._o[:i] + self._o[i + 1:]
             r.append(e)
             self._o = r
         else:
             self._d.add(e)
             self._o.append(e)
+
     # just whack it.
     def delete(self, e):
         self._d.remove(e)
@@ -46,7 +52,7 @@ class UniqueStack(object):
         for i in range(0, len(self._o)):
             if self._o[i] == e:
                 # splice them together without e
-                r = self._o[:i] + self._o[i+1:]
+                r = self._o[:i] + self._o[i + 1:]
         self._o = r
 
     def pop(self):
@@ -63,23 +69,33 @@ class UniqueStack(object):
 
     def __getitem__(self, i):
         return self._o[i]
+
     def __len__(self):
         return len(self._d)
+
     def __repr__(self):
         return "< " + ", ".join(map(str, self._o)) + " > "
 
+    def elems(self):
+        return self._o
+
 
 class FramePool(object):
-    def assess_size(self):
+    def assess_size(self) -> int:
         raise NotImplemented
-    def size(self):
+
+    def size(self) -> int:
         raise NotImplemented
-    def read_frame(self, id):
+
+    def read_frame(self, id: int):
         raise NotImplemented
-    def write_frame(self, id, data):
+
+    def write_frame(self, id: int, data: Any):
         raise NotImplemented
-    def falloc(self, count):
+
+    def falloc(self, count: int):
         raise NotImplemented
+
 
 class DiskPool(FramePool):
     def __init__(self, limit, dirname):
@@ -94,10 +110,10 @@ class DiskPool(FramePool):
             for entry in it:
                 if entry.is_file():
                     flist.append(entry.name)
-        counter=0
+        counter = 0
         for f in flist:
             if f.startswith("page_"):
-                counter+=1
+                counter += 1
         self._size = counter
         return counter
 
@@ -124,6 +140,7 @@ class DiskPool(FramePool):
         with open(os.path.join(self._dirname, f"page_{pageid}"), 'w') as f:
             f.write(json.dumps(data.data()))
 
+
 class MockPool(FramePool):
     def __init__(self, limit):
         self._frames = {}
@@ -133,7 +150,7 @@ class MockPool(FramePool):
     def size(self):
         return self._size
 
-    def assess_size():
+    def assess_size(self):
         return len(self._frames)
 
     def read_frame(self, pageid):
@@ -150,37 +167,44 @@ class MockPool(FramePool):
         assert isinstance(data, PageFrame)
         self._frames[pageid] = data.data()
 
+
 class PageFrame(object):
     # a Page is created, associated with some specific data frame.
-    def __init__(self, data):
+    def __init__(self, data: Any):
         self._frame = data
         # one pin per thread using the page.
         self._pins = 0
         # should the frame know it's dirty? or should the FramePool
         # track whether its dirty or not?
         self._dirty = False
-    def __repr__(self):
-        return f"p: {self._pins}, d: {self._dirty}: {self._frame}"
 
-    def data(self):
+    def __repr__(self):
+        return f"<pf p: {self._pins}, d: {self._dirty}, {self._frame} >"
+
+    def data(self) -> Any:
         return self._frame
-    def set_data(self, data):
+
+    def set_data(self, data: Any):
         self._dirty = True
         self._frame = data
 
-    def count_pins(self):
+    def count_pins(self)-> int:
         return self._pins
+
     def inc_pin(self):
         self._pins = self._pins + 1
         return self._pins
+
     def dec_pin(self):
         self._pins = self._pins - 1
         return self._pins
 
     def is_dirty(self):
         return self._dirty
+
     def make_dirty(self):
         self._dirty = True
+
     def undirty(self):
         self._dirty = False
 
@@ -191,35 +215,53 @@ class PageFrame(object):
     def __exit__(self, x, y, z):
         self.dec_pin()
 
+
 # interface: an evictor takes a list of pages and a unique Stack and return the index of
 # the one to evict.
-def random_evictor(pages, pageid_idx_map, lru):
+def random_evictor(pages: list[PageFrame | None], frame2buf: dict[int, int], _ : UniqueStack)-> int:
+    # TODO: properly handle pins
+    #potential = random.randint(0, len(pages) - 1)
+    #while pages[potential].count_pins() != 0:
     potential = random.randint(0, len(pages) - 1)
-    while pages[potential].count_pins() != 0:
-        potential = random.randint(0, len(pages) - 1)
 
-    return potential
+    return frame2buf[potential]
 
-def bottom_evictor(pages, pageid_idx_map, lru):
-    pageid = lru.bottom()
-    for e in pageid_idx_map:
-        if pageid_idx_map[e] == pageid:
-            return e
+
+def bottom_evictor(pages: list[PageFrame | None], frame2buf: dict[int, int], lru: UniqueStack)-> (int, int):
+    #sys.stderr.write(f"length of pages {len(pages)}\n")
+    #sys.stderr.write(f"lru {lru.elems()}\n")
+
+    for e in lru.elems():
+#        sys.stderr.write(f"element: {e}\n")
+        pageid = frame2buf[e]
+        if pages[pageid] is not None:
+            # TODO: properly handle pins
+            # if pages[e].count_pins == 0:
+            return pageid, e
+
+
     raise EvictionError()
 
 
 class EvictionError(Exception):
     pass
 
+
 class BufferPool(object):
+    _buf2frame: dict[int, int]
+    _evictor: Callable[[list[PageFrame | None], dict[int, int], UniqueStack], int]
+    _frame2buf: dict[int, int]
+    _pages: list[PageFrame | None]
+    _pool: FramePool
+    _stack: UniqueStack
     __slots__ = [
         '_size',
         # fixed number of pages
         '_pages',
         # pageid -> index
-        '_active_pages',
+        '_frame2buf',
         # index -> pageid
-        '_reverse_active_pages',
+        '_buf2frame',
         # lru
         '_stack',
         # backing store
@@ -230,37 +272,38 @@ class BufferPool(object):
         # page OIDs run from [0, _total_page_count) over integers.
         '_total_page_count',
     ]
-    def __init__(self, size, pool, evictor):
+
+    def __init__(self, size: int, pool: FramePool, evictor: Callable[[list[PageFrame | None], dict[int, int], UniqueStack], int]):
         # This size is the size of the buffer pool
         self._size = size
         self._pages = [None for x in range(0, size)]
         # map of pageid to index in self._pages
-        self._active_pages = {}
+        self._frame2buf = {}
         # map of index to pageid.
-        self._reverse_active_pages = {}
+        self._buf2frame = {}
         self._pool = pool
         self._evictor = evictor
         self._stack = UniqueStack()
 
-    def release_page(self, idx):
+    def release_page(self, idx: int):
         """
         Page is released for later eviction
         """
         if idx > self._pool.size() - 1:
             raise IndexError(f"buffer pool index out of range{idx}")
 
-        if idx not in self._active_pages:
+        if idx not in self._frame2buf:
             # this is not a valid page for writing: something has
             # evicted it from under our feet.
             raise EvictionError()
 
-        self._active_pages[idx].pin_dec()
+        self._pages[self._frame2buf[idx]].dec_pin()
 
-    def acquire_page(self, id):
+    def acquire_page(self, idx: int) -> PageFrame:
         """
         Page is acquired from its data source, if need be
         """
-        p = self.get_page(id)
+        p = self.get_page(idx)
         p.inc_pin()
         return p
 
@@ -280,48 +323,54 @@ class BufferPool(object):
         if to_be_allocated > 0:
             self._pool.falloc(to_be_allocated)
 
-
     def falloc(self):
         self._pool.falloc(1)
 
     def fsync_item(self, idx):
-        if self._active_pages[idx].is_dirty():
-            self._pool.write_frame(idx, self._active_pages[idx])
-            self._active_pages[idx].undirty()
+        page = self._pages[self._frame2buf[idx]]
+        if page.is_dirty():
+            self._pool.write_frame(idx, page)
+            page.undirty()
 
     def fsync(self):
-        for key in self._active_pages:
+        for key in self._frame2buf:
             self.fsync_item(key)
 
     def size(self):
         return self._pool.size()
 
-    def get_page(self, idx):
-        if idx > self._pool.size() - 1:
-            raise IndexError(f"mempool index out of range {idx}")
+    def get_page(self, frame_index: int) -> PageFrame:
+        """
+        :param frame_index: index of the frame, _as understood by the overlay_, not the id of the buffer
+        :return: frame or exception
+        """
+        if frame_index > self._pool.size() - 1:
+            raise IndexError(f"mempool index out of range {frame_index}")
 
         # if we don't have the data already
-        if idx not in self._active_pages:
+        if frame_index not in self._frame2buf:
 
             # precondition: we don't have the page loaded
 
-            if len(self._active_pages) == self._size:
+            if len(self._frame2buf) == self._size:
 
                 # precondition: we are full
 
                 # victim index is the index in the array for the
                 # (limited) list of pages. Evictors must check pin status.
-                victim_index = self._evictor(self._pages, self._reverse_active_pages, self._stack)
+                victim_buf_idx, victim_frame_idx  = self._evictor(self._pages, self._frame2buf, self._stack)
                 # victim pageid is the page victim_index points to
-                victim_pageid = self._reverse_active_pages[victim_index]
-                if self._pages[victim_index].is_dirty():
-                    self._pool.write_frame(victim_pageid, self._pages[victim_index])
+                victim_page = self._pages[victim_buf_idx]
+                if victim_page.is_dirty():
+                    self._pool.write_frame(victim_buf_idx, victim_page)
 
-                self._pages[victim_index] = None
-                del self._active_pages[victim_pageid]
-                del self._reverse_active_pages[victim_index]
-                # the Stack is indexed by the requested pageid.
-                self._stack.delete(victim_pageid)
+                # drop the page out of memory
+                self._pages[victim_buf_idx] = None
+                # drop the idx out of use
+                self._stack.delete(self._buf2frame[victim_buf_idx])
+                # drop the two way map
+                del self._frame2buf[victim_frame_idx]
+                del self._buf2frame[victim_buf_idx]
 
                 # postcondition of this little block: we have one empty slot
 
@@ -330,21 +379,19 @@ class BufferPool(object):
 
             target_index = None
             for i in range(0, self._size):
-                if self._pages[i] == None:
+                if self._pages[i] is None:
                     target_index = i
                     break
-            frame = self._pool.read_frame(idx)
+            frame = self._pool.read_frame(frame_index)
             self._pages[target_index] = frame
-            self._active_pages[idx] = frame
-            self._reverse_active_pages[target_index] = idx
+            self._frame2buf[frame_index] = target_index
+            self._buf2frame[target_index] = frame_index
 
             # postcondition: the frame is loaded into memory and wired into the map
 
         # push idx onto the lru
-        self._stack.push(idx)
-        return self._active_pages[idx]
-
-
+        self._stack.push(frame_index)
+        return self._pages[self._frame2buf[frame_index]]
 
 
 # the SlabMapper maps an array of Objects onto the bufferpool.
@@ -359,13 +406,15 @@ class SlabMapper(object):
         """
         self._bp = bp
         self._stride = stride
+
     def flush(self, seq):
         required_allocation = int(len(seq) / self._stride)
         self._bp.ensure_allocation(required_allocation - 1)
         for i in range(0, required_allocation):
-            bottom = i*self._stride
-            top = (i+1)*self._stride
+            bottom = i * self._stride
+            top = (i + 1) * self._stride
             self._bp[i] = seq[bottom:top]
+
     def load(self):
         result = []
         for i in range(0, self._bp.size()):

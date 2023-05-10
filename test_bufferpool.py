@@ -1,8 +1,10 @@
+import logging
 import unittest
 import os
 import tempfile
 import json
 import random
+import sys
 
 import bufferpool
 
@@ -139,7 +141,6 @@ class TestBufferPool(unittest.TestCase):
 
 class TestSlabMapper(unittest.TestCase):
     def test_simple(self):
-        #dp = bufferpool.MockPool(30)
         d = tempfile.mkdtemp()
         dp = bufferpool.DiskPool(5, d)
         bp = bufferpool.BufferPool(3, dp, bufferpool.bottom_evictor)
@@ -150,4 +151,4 @@ class TestSlabMapper(unittest.TestCase):
         self.assertEqual(dataset, got)
 
 if __name__ == '__main__':
-    unittest.main(verbosity=2)
+    unittest.main(verbosity=4)
