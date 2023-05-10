@@ -28,6 +28,16 @@ impl<T> PageFrame<T>
 where
     T: Clone,
 {
+    pub fn boxed_new(boxed: Box<T>) -> Self {
+        PageFrame {
+            mutex: Mutex::new( InnerFrame{
+                data: boxed,
+                pins: 0,
+                dirty: false
+            })
+        }
+    }
+
     pub fn new(data: T) -> Self {
         PageFrame {
             mutex: Mutex::new(InnerFrame {
@@ -66,7 +76,8 @@ where
     // has a clone.
     pub fn data(&self) -> T {
         let inner = self.mutex.lock().unwrap();
-        *(inner.data.clone())
+        // TODO: address the clone.
+        *inner.data.clone()
     }
 
     pub fn put(&self, data: T) {
@@ -131,6 +142,7 @@ where
         };
         match element {
             Some(t) => {
+                // TODO: remove the clone if possible. this should be covered by the box and be done.
                 let data = t.clone();
                 // haxxx.
                 Ok(PageFrame::new(data.data()))
