@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
+use std::ops::Deref;
 use std::path::PathBuf;
 use std::sync::Mutex;
 
@@ -10,7 +11,7 @@ struct InnerFrame<T>
 where
     T: Clone,
 {
-    data: T,
+    data: Box<T>,
     pins: u32,
     dirty: bool,
 }
@@ -30,7 +31,7 @@ where
     pub fn new(data: T) -> Self {
         PageFrame {
             mutex: Mutex::new(InnerFrame {
-                data: data,
+                data: Box::new(data),
                 pins: 0,
                 dirty: false,
             }),
@@ -62,15 +63,15 @@ where
         inner.dirty = dirty;
     }
 
+    // has a clone.
     pub fn data(&self) -> T {
         let inner = self.mutex.lock().unwrap();
-        let d = inner.data.clone();
-        d
+        *(inner.data.clone())
     }
 
     pub fn put(&self, data: T) {
         let mut inner = self.mutex.lock().unwrap();
-        inner.data = data;
+        *inner.data = data;
     }
 
     // with_data is the designated function that allows you to modify the data in the frame.
@@ -79,7 +80,7 @@ where
         F: FnOnce(&mut T),
     {
         let mut inner = self.mutex.lock().unwrap();
-        f(&mut inner.data);
+        f(&mut inner.data.as_mut());
     }
 }
 
@@ -272,6 +273,26 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_frame_happy() {
+        let v = vec![10, 20, 30];
+        let pf = PageFrame::new(v);
+        let mut extracted : Vec<i32> = Vec::new();
+        pf.with_data(|x: &mut Vec<i32>| {
+            println!("{:?}", x);
+
+            let v = vec![-100, -200, -300];
+            *x = v;
+            println!("{:?}", x);
+
+            extracted = x.clone();
+        });
+
+        let extracted = extracted;
+        println!("{:?}", extracted);
+    }
+
     #[test]
     fn test_mempool_happy() {
         let mut pool = MemPool::new();

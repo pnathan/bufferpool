@@ -4,7 +4,7 @@ use std::collections::HashMap;
 
 use crate::framepool;
 // use crate::framepool::PageFrame;
-use crate::framepool::{FramePool};
+use crate::framepool::FramePool;
 use crate::unique_stack;
 
 type BufferPoolId = u64;
@@ -276,7 +276,7 @@ mod tests {
         let mut mem_pool = MemPool::<u8>::new();
         let mut bp = BufferPool::<u8>::new(10, &mut mem_pool, bottom_evictor);
 
-        bp.put_page(0, 0)?;
+        bp.put_page(0, 0);
         bp.get_page(0);
 
         let evicted = bottom_evictor::<u8>(&bp.pages, &bp.lru);
