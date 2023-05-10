@@ -1,9 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
-use std::ops::Deref;
 use std::path::PathBuf;
-use std::sync::Mutex;
 use crate::pageframe::PageFrame;
 
 // A FramePool is a pool of, obviously, frames of <T>.

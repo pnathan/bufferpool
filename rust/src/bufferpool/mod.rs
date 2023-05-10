@@ -115,7 +115,7 @@ where
         evictor: EvictorFn<T>,
     ) -> Self {
         let mut alloced_pages = Vec::new();
-        for i in 0..size {
+        for _ in 0..size {
             alloced_pages.push(None);
         }
         BufferPool {
@@ -151,7 +151,7 @@ where
 
     // put_page writes data to the given index
     pub fn put_page(&mut self, frame_idx: FramePoolId, data: T) -> Result<(), BufferPoolErrors> {
-        let mut page = self
+        let page = self
             .get_page(frame_idx)
             .ok_or(BufferPoolErrors::NoPageAvailable)?;
         page.with_data(|d: &mut T| *d = data);
@@ -217,9 +217,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::framepool;
     use crate::framepool::MemPool;
-    use crate::unique_stack;
 
     #[test]
     fn test_new() {
@@ -238,6 +236,8 @@ mod tests {
         let mut mem_pool = MemPool::<u8>::new();
         let mut bp = BufferPool::<u8>::new(10, &mut mem_pool, bottom_evictor);
 
+        let x = bp.get_page(0);
+        assert_eq!(x, None);
         bp.put_page(0, 0).unwrap();
         bp.get_page(0);
 

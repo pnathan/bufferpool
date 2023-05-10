@@ -1,8 +1,9 @@
+use std::intrinsics::transmute;
 use std::sync::Mutex;
 use serde::{Deserialize, Serialize};
 
 // the Innerframe contains the data for a Frame's mutex.
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Debug, PartialEq)]
 struct InnerFrame<T>
 where
     T: Clone,
@@ -13,11 +14,20 @@ where
 }
 
 // A frame is a container for data to be written.
+#[derive(Debug)]
 pub struct PageFrame<T>
 where
     T: Clone,
 {
     mutex: Mutex<InnerFrame<T>>,
+}
+
+impl<T> PartialEq for PageFrame<T> where T : Clone + PartialEq {
+    fn eq(&self, other: &Self) -> bool {
+        let data = self.mutex.lock().unwrap();
+        let o2 =other.mutex.lock().unwrap();
+        *data == *o2
+    }
 }
 
 impl<T> PageFrame<T>
