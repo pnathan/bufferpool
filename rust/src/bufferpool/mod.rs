@@ -1,8 +1,12 @@
 use rand;
 use rand::{Rng, thread_rng};
 use std::collections::HashMap;
+use std::fmt::Debug;
 
 use crate::{framepool, pageframe};
+use crate::bufferpool::BufferPoolErrors::{LoadingError, NoAvailablePage, NoFindablePage};
+use crate::framepool::FramePoolErrors;
+use crate::pageframe::PageFrame;
 use crate::unique_stack;
 
 type BufferPoolId = u64;
@@ -13,18 +17,30 @@ type EvictorFn<T> = fn(
     &unique_stack::UniqueStack<BufferPoolId>,
 ) -> Result<BufferPoolId, BufferPoolErrors>;
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum BufferPoolErrors {
     NoEvictablePage,
-    NoPageAvailable,
+    NoAvailablePage,
+    // The relevant page is set to nil in the buffer pool
+    NoFindablePage,
+    OutOfBounds,
+    AllocationError(FramePoolErrors),
+    LoadingError(FramePoolErrors),
+    FlushingError(FramePoolErrors)
 }
 
 impl std::fmt::Display for BufferPoolErrors {
     fn fmt(&self, fmt: &mut std::fmt::Formatter) -> std::fmt::Result {
-        fmt.write_str(match self {
-            Self::NoEvictablePage => "no evictable pages",
-            Self::NoPageAvailable => "no available pages",
-        })
+        let d = match self {
+            Self::NoEvictablePage => "no evictable pages".to_string(),
+            Self::NoAvailablePage => "no available pages".to_string(),
+            Self::NoFindablePage => "no findable pages".to_string(),
+            Self::OutOfBounds => "out of bounds".to_string(),
+            Self::AllocationError(s) => format!("allocation error: {:?}", s),
+            Self::FlushingError(s) => format!("flushing error: {:?}", s),
+            Self::LoadingError(s) => format!("loading error: {:?}", s)
+        };
+        fmt.write_str(d.as_str())
     }
 }
 
@@ -83,7 +99,7 @@ where
 
 pub struct BufferPool<'a, T>
 where
-    T: Clone,
+    T: Clone + Debug
 {
     // number of pages this bufferpool holds
     size: usize,
@@ -107,7 +123,7 @@ where
 
 impl<'a, T> BufferPool<'a, T>
 where
-    T: Clone,
+    T: Clone + Debug,
 {
     pub fn new(
         size: usize,
@@ -118,7 +134,7 @@ where
         for _ in 0..size {
             alloced_pages.push(None);
         }
-        BufferPool {
+        let mut bp = BufferPool {
             size: size,
             pages: alloced_pages,
             buf2frame: HashMap::new(),
@@ -126,44 +142,95 @@ where
             lru: unique_stack::UniqueStack::new(),
             evictor: evictor,
             frame_pool: pool,
-        }
+        };
+        bp.ensure_allocation(size as FramePoolId).unwrap();
+        return bp;
     }
 
     // ensure_allocation ensures that values up to the given idx in the backing Frame Pool store are allocated.
-    fn ensure_allocation(&mut self, idx: FramePoolId) -> Result<(), String> {
-        self.frame_pool.resize(idx)
+    fn ensure_allocation(&mut self, idx: FramePoolId) -> Result<(), BufferPoolErrors> {
+        match self.frame_pool.resize(idx) {
+            Ok(_) => Ok(()),
+            Err(e) => Err(BufferPoolErrors::AllocationError(e)),
+        }
     }
 
-    pub fn sync_index(&mut self, frame_idx: FramePoolId) -> Result<(), String> {
+    pub fn sync_index(&mut self, frame_idx: FramePoolId) -> Result<(), BufferPoolErrors> {
         if !self.frame2buf.contains_key(&frame_idx) {
             return Ok(());
         }
         let buf_idx = self.frame2buf[&frame_idx];
         let page = self.pages[buf_idx as usize]
             .as_ref()
-            .ok_or("unable to access index".to_string())?;
+            .ok_or(BufferPoolErrors::NoFindablePage)?;
         if page.is_dirty() {
             let x = pageframe::PageFrame::new(page.data());
-            self.frame_pool.write_frame(frame_idx, Box::new(x))?
+            match self.frame_pool.write_frame(frame_idx, Box::new(x)) {
+                Ok(_) => {}
+                Err(e) => {
+                    return Err(BufferPoolErrors::FlushingError(e))
+                }
+            }
         }
         Ok(())
     }
 
     // put_page writes data to the given index
     pub fn put_page(&mut self, frame_idx: FramePoolId, data: T) -> Result<(), BufferPoolErrors> {
-        let page = self
-            .get_page(frame_idx)
-            .ok_or(BufferPoolErrors::NoPageAvailable)?;
-        page.with_data(|d: &mut T| *d = data);
+        if frame_idx > self.frame_pool.size() {
+            return Err(BufferPoolErrors::OutOfBounds);
+        }
+        let page = self.get_page(frame_idx);
+        match page {
+            Ok(pageOption) => {
+                match pageOption {
+                    Some(p) =>   p.with_data(| d: &mut T | *d = data),
+                    None => panic!("wtf")
+                }
+            },
+            Err(LoadingError(frame_error)) => {
+                match frame_error {
+                    FramePoolErrors::NoSuchFrame => {
+
+                    },
+                    default => {
+                        return Err(BufferPoolErrors::LoadingError(default));
+                    }
+                }
+            }
+            Err(other) => {
+                return Err(other);
+            }
+        };
+
         Ok(())
     }
 
     // get_page returns a reference to the page at the given underlying index.
-    pub fn get_page(&mut self, frame_idx: FramePoolId) -> Option<&pageframe::PageFrame<T>> {
+    pub fn get_page(&mut self, frame_idx: FramePoolId) -> Result<Option<&pageframe::PageFrame<T>>, BufferPoolErrors> {
         // If this is beyond the size of the backing frame, then we can't get the page.
         if frame_idx > self.frame_pool.size() {
-            return None;
+            return Err(BufferPoolErrors::OutOfBounds);
         }
+
+        match self.ensure_page_loaded(&frame_idx) {
+            Ok(_) => {},
+            Err(e) => return Err(e),
+        }
+
+        let page = match self.frame2buf.get(&frame_idx) {
+            None => None,
+            Some(buffer_id) => {
+                let b: u64 = buffer_id.clone();
+                self.lru.push(b);
+                self.pages[b as usize].as_ref()
+            }
+        };
+        return Ok(page);
+    }
+
+    fn ensure_page_loaded(&mut self, frame_idx: &FramePoolId) -> Result<(), BufferPoolErrors>{
+        let frame_idx = frame_idx.clone();
 
         if !self.frame2buf.contains_key(&frame_idx) {
             // Then we don't have the page loaded.
@@ -171,16 +238,24 @@ where
                 // Precondition of this block: the BufferPool is full.
 
                 // Then we are full and must evict the least recently used page.
-                let victim_idx = (self.evictor)(&self.pages, &self.lru).ok()?; // Select a bufferID to remove.
+                let victim_idx = (self.evictor)(&self.pages, &self.lru)?; // Select a bufferID to remove.
 
                 let victim_page = self.pages[victim_idx as usize].as_ref().unwrap();
                 if victim_page.is_dirty() {
                     // Flush the page to the pool
 
                     // something says that the reference and cloning logic here is junk.
-                    let d = self.pages[victim_idx as usize].as_ref()?;
+                    let d = match self.pages[victim_idx as usize].as_ref() {
+                        None => return Err(NoFindablePage),
+                        Some(x) => x,
+                    };
                     let x = pageframe::PageFrame::new(d.data());
-                    self.frame_pool.write_frame(victim_idx, Box::new(x)).ok()?;
+                    match self.frame_pool.write_frame(victim_idx, Box::new(x)) {
+                        Ok(_) => {}
+                        Err(e) => {
+                            return Err(BufferPoolErrors::FlushingError(e))
+                        }
+                    };
                 }
                 // Precondition: the page is not dirty, or we have flushed it.
 
@@ -194,28 +269,38 @@ where
 
             // Precondition: We are not full, which is a None element in the self.pages vec.
 
-            let target_idx = self.pages.iter().position(|x| x.is_none())? as BufferPoolId;
+            let mut x: i64 = -1;
+            for i in 0..self.pages.len() {
+                if self.pages[i].is_none() {
+                    x = i as i64;
+                    break;
+                }
+            }
 
-            let new_frame = self.frame_pool.read_frame(frame_idx).ok()?;
+            if x == -1 {
+                eprintln!("pages say what: {:?}", self.pages);
+                return Err(BufferPoolErrors::NoAvailablePage);
+            }
+
+            let target_idx = x as BufferPoolId;
+
+            let new_frame = match self.frame_pool.read_frame(frame_idx) {
+                Ok(x) => x,
+                Err(e) => return Err(BufferPoolErrors::LoadingError(e)),
+            };
 
             self.pages[target_idx as usize] = Some(new_frame);
             self.buf2frame.insert(target_idx, frame_idx);
             self.frame2buf.insert(frame_idx, target_idx);
         }
-
-        match self.frame2buf.get(&frame_idx) {
-            None => None, // this should be an assert tbh.
-            Some(buffer_id) => {
-                let b: u64 = buffer_id.clone();
-                self.lru.push(b);
-                self.pages[b as usize].as_ref()
-            }
-        }
+        Ok(())
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use crate::bufferpool::BufferPoolErrors::LoadingError;
+    use crate::framepool::FramePoolErrors::NoSuchFrame;
     use super::*;
     use crate::framepool::MemPool;
 
@@ -235,9 +320,8 @@ mod tests {
     fn test_bottom_evictor() {
         let mut mem_pool = MemPool::<u8>::new();
         let mut bp = BufferPool::<u8>::new(10, &mut mem_pool, bottom_evictor);
-
         let x = bp.get_page(0);
-        assert_eq!(x, None);
+        assert_eq!(x, Err(LoadingError(NoSuchFrame)));
         bp.put_page(0, 0).unwrap();
         bp.get_page(0);
 

@@ -2,7 +2,19 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
+use crate::framepool::FramePoolErrors::{FileWriteError, DirectoryInitializationError, DeserializationError};
 use crate::pageframe::PageFrame;
+
+
+#[derive(Debug, PartialEq)]
+pub enum FramePoolErrors {
+    NoSuchFrame,
+    SerializationError,
+    DeserializationError,
+    FileWriteError,
+    FileReadError,
+    DirectoryInitializationError
+}
 
 // A FramePool is a pool of, obviously, frames of <T>.
 // A frame can be nominally considered to be a "block" of data.
@@ -12,13 +24,13 @@ pub trait FramePool<T>
 where
     T: Clone,
 {
-    fn read_frame(&mut self, idx: u64) -> Result<PageFrame<T>, String>;
-    fn write_frame(&mut self, idx: u64, data: Box<PageFrame<T>>) -> Result<(), String>;
-    fn resize(&mut self, count: u64) -> Result<(), String>;
+    fn read_frame(&mut self, idx: u64) -> Result<PageFrame<T>, FramePoolErrors>;
+    fn write_frame(&mut self, idx: u64, data: Box<PageFrame<T>>) -> Result<(), FramePoolErrors>;
+    fn resize(&mut self, count: u64) -> Result<(), FramePoolErrors>;
     // internally known size of the pool.
     fn size(&self) -> u64;
     // assess_size retrieves the real-world data size of the pool and updates it
-    fn assess_size(&mut self) -> Result<u64, String>;
+    fn assess_size(&mut self) -> Result<u64, FramePoolErrors>;
 }
 
 // Implement MemPool, a memory-only FramePool implementation
@@ -44,7 +56,7 @@ impl<T> FramePool<T> for MemPool<T>
 where
     T: Clone,
 {
-    fn read_frame(&mut self, id: u64) -> Result<PageFrame<T>, String> {
+    fn read_frame(&mut self, id: u64) -> Result<PageFrame<T>, FramePoolErrors> {
         let element = match self.pool.get(&id) {
             Some(t) => t,
             None => &None,
@@ -56,16 +68,16 @@ where
                 // haxxx.
                 Ok(PageFrame::new(data.data()))
             }
-            None => Err("No such frame".to_string()),
+            None => Err(FramePoolErrors::NoSuchFrame),
         }
     }
 
-    fn write_frame(&mut self, idx: u64, data: Box<PageFrame<T>>) -> Result<(), String> {
+    fn write_frame(&mut self, idx: u64, data: Box<PageFrame<T>>) -> Result<(), FramePoolErrors> {
         self.pool.insert(idx, Some(*data));
         Ok(())
     }
 
-    fn resize(&mut self, count: u64) -> Result<(), String> {
+    fn resize(&mut self, count: u64) -> Result<(), FramePoolErrors> {
         let old_sz = self.size();
         // from i from 0 to count, insert a None into the pool at pageid = prior_size + i
         for i in 0..count {
@@ -78,7 +90,7 @@ where
         self.pool.len() as u64
     }
 
-    fn assess_size(&mut self) -> Result<u64, String> {
+    fn assess_size(&mut self) -> Result<u64, FramePoolErrors> {
         Ok(self.size())
     }
 }
@@ -100,11 +112,11 @@ impl DiskPool {
 
     // initialize the pool, if it hasn't been already.
     // this will create the path
-    fn initialize(&mut self) -> Result<(), String> {
+    fn initialize(&mut self) -> Result<(), FramePoolErrors> {
         if self.initialized {
             return Ok(());
         }
-        fs::create_dir_all(&self.dirname).map_err(|_| "Error creating directory".to_string())?;
+        fs::create_dir_all(&self.dirname).map_err(|_| DirectoryInitializationError)?;
         self.initialized = true;
         Ok(())
     }
@@ -119,34 +131,34 @@ impl<'a, T> FramePool<T> for DiskPool
 where
     T: Clone + for<'b> Deserialize<'b> + Serialize,
 {
-    fn read_frame(&mut self, id: u64) -> Result<PageFrame<T>, String> {
+    fn read_frame(&mut self, id: u64) -> Result<PageFrame<T>, FramePoolErrors> {
         if let Err(e) = self.initialize() {
             return Err(e);
         }
 
         let result: T = fs::read_to_string(self.page_path(id))
-            .map_err(|_| "Error reading file".to_string())
+            .map_err(|_| FramePoolErrors::FileReadError)
             .and_then(|s| {
-                serde_json::from_str(&s).map_err(|_| "Error deserializing".to_string())
+                serde_json::from_str(&s).map_err(|_| DeserializationError)
             })?;
 
         Ok(PageFrame::new(result))
     }
 
-    fn write_frame(&mut self, idx: u64, data: Box<PageFrame<T>>) -> Result<(), String> {
+    fn write_frame(&mut self, idx: u64, data: Box<PageFrame<T>>) -> Result<(), FramePoolErrors> {
         if let Err(e) = self.initialize() {
             return Err(e);
         }
         let d = data.data();
         serde_json::to_string(&d)
-            .map_err(|_| "Error serializing".to_string())
+            .map_err(|_| FramePoolErrors::SerializationError)
             .and_then(|s| {
                 fs::write(self.page_path(idx), s)
-                    .map_err(|x| format!("Error writing file: ${:?}", x))
+                    .map_err(|x| FramePoolErrors::FileWriteError)
             })
     }
 
-    fn resize(&mut self, count: u64) -> Result<(), String> {
+    fn resize(&mut self, count: u64) -> Result<(), FramePoolErrors> {
         if let Err(e) = self.initialize() {
             return Err(e);
         }
@@ -158,7 +170,7 @@ where
             if !b {
                 match fs::write(path, "{}") {
                     Ok(_) => (),
-                    Err(e) => return Err(format!("Error writing file: {:?}", e)),
+                    Err(e) => return Err(FileWriteError),
                 }
             }
         }
@@ -171,7 +183,7 @@ where
     }
 
     // assess the size of the pool, by counting the number of files in the directory
-    fn assess_size(&mut self) -> Result<u64, String> {
+    fn assess_size(&mut self) -> Result<u64, FramePoolErrors> {
         if let Err(e) = self.initialize() {
             return Err(e);
         }
@@ -211,7 +223,7 @@ mod tests {
         match pool.write_frame(0, Box::new(frame)) {
             Ok(_) => (),
             Err(e) => {
-                panic!("{}", e)
+                panic!("{:?}", e)
             }
         }
         let frame: PageFrame<Vec<i32>> = pool.read_frame(0).unwrap();
