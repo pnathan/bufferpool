@@ -21,15 +21,29 @@ simplifies testing, deployments, etc.
 
 ** Go
 
-This will be used in my own projects. 
+This will be used in my own projects.
+
+** Rust
+
+This will be the gold standard implementation.
+
+*** notes
+
+The top-level concept will be to load a block of data into pool and then mutate it via get/write from there.
+
+From a pure refchecking perspective, the conventional references are difficult to address with a lifetime.
+
+Dataframes are therefore Box<T> for now.
+
+
 
 ** plans
 
 Common Lisp, Rust
 
-- CL - for sophistictated projects
+- CL - for sophisticated projects
 
-- Rust - for really going for performance and learning about the borrow checker.
+
 
 
 
