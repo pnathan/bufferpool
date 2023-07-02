@@ -375,76 +375,81 @@ type Slab struct {
 	// The size of the slab
 	size int
 }
+
 func NewSlab(frameSize int, backingPath string) (*Slab, error) {
 	fp, err := NewDiskPool(frameSize, backingPath)
 	if err != nil {
 		return nil, err
 	}
 	return &Slab{
-		size: 0,
+		size:        0,
 		strideWidth: 16,
-		pool: NewBufferPool(100, fp, BottomEvictor{}),
+		pool:        NewBufferPool(100, fp, BottomEvictor{}),
 	}, nil
 }
 
 // Put - Writes bytes to index in the slab
 func (slab *Slab) Put(startingIndex int, data []byte) error {
-	// find the starting buffer to write to
-	targetBufferStart := startingIndex/slab.strideWidth
-	targetIndexModulus := startingIndex%slab.strideWidth
-	width := len(data) / slab.strideWidth + 1
+	return fmt.Errorf("unable to put to a slab thank you")
+	/*
+		// find the starting buffer to write to
+		targetBufferStart := startingIndex / slab.strideWidth
+		targetIndexModulus := startingIndex % slab.strideWidth
+		width := len(data)/slab.strideWidth + 1
 
-	// We acquire a page, write from the starting index to the end of the page, then release the page.
-	// We then acquire the next page, write from the start of the page to the end of the data, then release the page.
-	// We repeat this process until we have written all of the data.
-	data_counter := 0
-	for bufferIndex := targetBufferStart; bufferIndex < targetBufferStart + width; bufferIndex++ {
-		if err := func() error {
+		// We acquire a page, write from the starting index to the end of the page, then release the page.
+		// We then acquire the next page, write from the start of the page to the end of the data, then release the page.
+		// We repeat this process until we have written all of the data.
+		data_counter := 0
+		for bufferIndex := targetBufferStart; bufferIndex < targetBufferStart+width; bufferIndex++ {
+			if err := func() error {
+				page, err := slab.pool.AcquirePage(bufferIndex)
+				defer func() { _ = slab.pool.ReleasePage(bufferIndex) }()
+
+				if err != nil {
+					return err
+				}
+				page.WithWrite(func(d *[]byte) error {
+					for i := bufferIndex * slab.strideWidth; i < (bufferIndex+1)*slab.strideWidth && data_counter < len(data); i++ {
+						(*d)[i] = data[data_counter]
+						data_counter++
+					}
+					return nil
+				})
+				return nil
+			}(); err != nil {
+				return err
+			}
+		}
+
+		for i := target; i < target+width; i++ {
+			bufferIndex := i % slab.strideWidth
 			page, err := slab.pool.AcquirePage(bufferIndex)
-			defer func(){ _ = slab.pool.ReleasePage(bufferIndex) }()
-
 			if err != nil {
 				return err
 			}
 			page.WithWrite(func(d *[]byte) error {
-				for i := bufferIndex * slab.strideWidth ; i < (bufferIndex + 1) * slab.strideWidth && data_counter < len(data); i++ {
-					(*d)[i] = data[data_counter]
-					data_counter++
-				}
-				return nil
+				*d = data
 			})
-			return nil
-		}(); err != nil {
-			return err
+			defer func() { _ = slab.pool.ReleasePage(target) }()
 		}
-	}
-
-
-
-	for i := target; i < target + width; i++ {
-		bufferIndex := i % slab.strideWidth
-		page, err := slab.pool.AcquirePage(bufferIndex)
-		if err != nil {
-			return err
-		}
-		page.WithWrite(func(d *[]byte) error {
-			*d[] = data
-		})
-		defer func() { _ = slab.pool.ReleasePage(target) }()
-	}
+	*/
 }
 
 // Get - Gets bytes from index in the slab.
 func (slab *Slab) Get(idx int) ([]byte, error) {
-	if idx > bp.framePool.Size() || idx < 0 {
-		return nil, fmt.Errorf("index out of range: %d", idx)
-	}
-	pf, err := bp.AcquirePage(idx)
-	if err != nil {
-		return nil, err
-	}
-	defer func(){  _ = bp.ReleasePage(idx) }()
-	return pf.DataClone(), nil
+	return nil, fmt.Errorf("unable to GET from a slab thank you")
+	/*
+		if idx > bp.framePool.Size() || idx < 0 {
+			return nil, fmt.Errorf("index out of range: %d", idx)
+		}
+		pf, err := bp.AcquirePage(idx)
+		if err != nil {
+			return nil, err
+		}
+		defer func() { _ = bp.ReleasePage(idx) }()
+		return pf.DataClone(), nil
+	*/
 }
 
 // ReleasePage decrements the pin of `idx`.

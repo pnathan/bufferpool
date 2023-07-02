@@ -233,8 +233,9 @@ func TestBottomEvictor_Evict(t *testing.T) {
 }
 
 func TestEndGeneralUsageBufferPool(t *testing.T) {
-	d := t.TempDir()
-	bp, err := NewSlab(4, d)
+	//d := t.TempDir()
+	//bp, err := NewSlab(4, d)
+	var err error
 	if err != nil {
 		t.Fatal(err)
 	}
