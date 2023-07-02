@@ -1,0 +1,142 @@
+;;; kyped from openai.
+;;;
+;;; its really not very good code at all. probably will have to write
+;;; almost all of it.
+
+(defclass unique-stack ()
+  ((data :initarg :data :accessor data)
+   (ordered-list :initarg :ordered-list :accessor ordered-list)))
+
+(defun push (stack element)
+  (if (gethash element (data stack))
+      (let ((r nil))
+        (dotimes (i (length (ordered-list stack)))
+          (when (eql (elt (ordered-list stack) i) element)
+            (setq r (append (subseq (ordered-list stack) 0 i)
+                            (subseq (ordered-list stack) (1+ i))))))
+        (push element r)
+        (setf (ordered-list stack) r))
+      (puthash element t (data stack))
+      (push element (ordered-list stack))))
+
+(defun delete (stack element)
+  (remhash element (data stack))
+  (setf (ordered-list stack)
+        (loop for element-in-ordered-list in (ordered-list stack)
+              unless (eql element element-in-ordered-list)
+              collect element-in-ordered-list)))
+
+(defun pop (stack)
+  (let ((r (pop (ordered-list stack))))
+    (delete stack r)
+    r))
+
+(defun top (stack)
+  (car (last (ordered-list stack))))
+
+(defun bottom (stack)
+  (car (ordered-list stack)))
+
+(defun length (stack)
+  (hash-table-count (data stack)))
+
+(defun __repr__ (stack)
+  (format nil "< ~{~a, ~} >" (ordered-list stack)))
+
+
+(defclass buffer-pool ()
+  ((size :initarg :size :accessor size)
+   (pages :initarg :pages :accessor pages)
+   (active-pages :initarg :active-pages :accessor active-pages)
+   (reverse-active-pages :initarg :reverse-active-pages :accessor reverse-active-pages)
+   (stack :initarg :stack :accessor stack)
+   (pool :initarg :pool :accessor pool)
+   (evictor :initarg :evictor :accessor evictor)
+   (total-page-count :initarg :total-page-count :accessor total-page-count)))
+
+(defun release-page (pool idx)
+  (when (or (> idx (1- (size pool)))
+            (not (gethash idx (active-pages pool))))
+    (error "buffer pool index out of range or page not active"))
+  (decf (pin (gethash idx (active-pages pool)))))
+
+(defun acquire-page (pool id)
+  (let ((p (get-page pool id)))
+    (incf (pin p))
+    p))
+
+(defun get-page (pool idx)
+  (when (> idx (1- (size pool)))
+    (error "mempool index out of range"))
+  (unless (gethash idx (active-pages pool))
+    (if (= (hash-table-count (active-pages pool)) (size pool))
+        (let ((victim-index (funcall (evictor pool)
+                                     (pages pool)
+                                     (reverse-active-pages pool)
+                                     (stack pool)))
+              (victim-pageid (gethash victim-index (reverse-active-pages pool))))
+          (when (dirty (gethash victim-index (pages pool)))
+            (funcall (write-frame (pool pool)) victim-pageid (gethash victim-index (pages pool))))
+          (setf (gethash victim-index (pages pool)) nil)
+          (remhash victim-pageid (active-))))))
+
+(defun ensure-allocation (pool idx)
+  (let ((to-be-allocated (- idx (1- (size pool)))))
+    (when (> to-be-allocated 0)
+      (funcall (falloc (pool pool)) to-be-allocated))))
+
+(defun fsync-item (pool idx)
+  (when (dirty (gethash idx (active-pages pool)))
+    (funcall (write-frame (pool pool)) idx (gethash idx (active-pages pool)))
+    (setf (dirty (gethash idx (active-pages pool))) nil)))
+
+(defun fsync (pool)
+  (maphash (lambda (idx page)
+             (fsync-item pool idx))
+           (active-pages pool)))
+
+(defun get-page (pool idx)
+  (when (> idx (1- (size pool)))
+    (error "mempool index out of range"))
+  (unless (gethash idx (active-pages pool))
+    (if (= (hash-table-count (active-pages pool)) (size pool))
+        (let ((victim-index (funcall (evictor pool)
+                                     (pages pool)
+                                     (reverse-active-pages pool)
+                                     (stack pool)))
+              (victim-pageid (gethash victim-index (reverse-active-pages pool))))
+          (when (dirty (gethash victim-index (pages pool)))
+            (funcall (write-frame (pool pool)) victim-pageid (gethash victim-index (pages pool))))
+          (setf (gethash victim-index (pages pool)) nil)
+          (remhash victim-pageid (active-pages pool))
+          (remhash victim-index (reverse-active-pages pool)))
+      (push victim-pageid (stack pool)))
+    (setf (gethash idx (pages pool)) (funcall (read-frame (pool pool)) idx))
+    (setf (gethash idx (active-pages pool)) idx)
+    (setf (gethash (length (active-pages pool)) (reverse-active-pages pool)) idx))
+  (gethash idx (pages pool)))
+
+(defun falloc (pool)
+  (funcall (falloc (pool pool)) 1))
+
+(defun size (pool))
+
+(defun size (pool)
+  (funcall (size (pool pool))))
+
+(defun __getitem__ (pool idx)
+  (get-page pool idx))
+
+(defun __setitem__ (pool idx value)
+  (let ((item (acquire-page pool idx)))
+    (setf (data item) value)
+    (fsync-item pool idx)))
+
+(defun __init__ (pool size pool-obj evictor)
+  (setf (size pool) size)
+  (setf (pages pool) (make-list size nil))
+  (setf (active-pages pool) (make-hash-table))
+  (setf (reverse-active-pages pool) (make-hash-table))
+  (setf (stack pool) (make-instance 'unique-stack))
+  (setf (pool pool) pool-obj)
+  (setf (evictor pool) evictor))
