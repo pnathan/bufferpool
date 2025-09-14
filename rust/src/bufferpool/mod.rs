@@ -126,7 +126,9 @@ where
         }
 
         // Use BufferPool's get_page method to transparently handle caching
-        let result = self.buffer_pool.get_page(self.current_index)
+        let result = self
+            .buffer_pool
+            .get_page(self.current_index)
             .map(|page| page.data());
 
         self.current_index += 1;
