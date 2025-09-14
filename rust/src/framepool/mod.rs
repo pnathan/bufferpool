@@ -82,7 +82,7 @@ impl<T> PageFrame<T> {
     {
         let mut inner = self.mutex.lock().unwrap();
         // Use Arc::make_mut for copy-on-write - only clones if there are other references
-        let mut_data = Arc::make_mut(&mut inner.data);  
+        let mut_data = Arc::make_mut(&mut inner.data);
         let result = f(mut_data);
         inner.dirty = true;
         result
@@ -273,6 +273,12 @@ impl<T> MemPool<T> {
     }
 }
 
+impl<T> Default for MemPool<T> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<T> FramePool<T> for MemPool<T>
 where
     T: Clone,
@@ -352,9 +358,7 @@ where
     T: for<'de> Deserialize<'de> + Serialize + Clone,
 {
     fn get_frame_ref(&mut self, id: u64) -> Result<Arc<T>, String> {
-        if let Err(e) = self.initialize() {
-            return Err(e);
-        }
+        self.initialize()?;
 
         let result: T = fs::read_to_string(self.page_path(id))
             .map_err(|_| "Error reading file".to_string())
@@ -366,9 +370,7 @@ where
     }
 
     fn put_frame(&mut self, idx: u64, data: Arc<T>) -> Result<(), String> {
-        if let Err(e) = self.initialize() {
-            return Err(e);
-        }
+        self.initialize()?;
 
         serde_json::to_string(&*data)
             .map_err(|_| "Error serializing".to_string())
@@ -379,9 +381,7 @@ where
     }
 
     fn resize(&mut self, count: u64) -> Result<(), String> {
-        if let Err(e) = self.initialize() {
-            return Err(e);
-        }
+        self.initialize()?;
         let old_sz = <DiskPool as FramePool<T>>::size(self);
         // from i from 0 to count, insert a None into the pool at pageid = prior_size + i
         for i in 0..count {
@@ -404,18 +404,14 @@ where
 
     // assess the size of the pool, by counting the number of files in the directory
     fn assess_size(&mut self) -> Result<u64, String> {
-        if let Err(e) = self.initialize() {
-            return Err(e);
-        }
+        self.initialize()?;
 
         let paths = fs::read_dir(self.dirname.clone()).unwrap();
         let mut count = 0;
-        for p in paths {
-            if let Ok(p) = p {
-                if let Some(filename) = p.file_name().to_str() {
-                    if filename.starts_with("page_") {
-                        count += 1;
-                    }
+        for p in paths.flatten() {
+            if let Some(filename) = p.file_name().to_str() {
+                if filename.starts_with("page_") {
+                    count += 1;
                 }
             }
         }

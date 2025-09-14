@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites tests="19" failures="0" errors="0" time="0.350675">
+	<testsuite tests="19" failures="0" time="0.010000" name="gitlab.com/pnathan/bufferpool/src/bufferpool" timestamp="2023-07-01T23:55:34-07:00">
+		<properties>
+			<property name="go.version" value="go1.19.4 linux/amd64"></property>
+		</properties>
+		<testcase classname="gitlab.com/pnathan/bufferpool/src/bufferpool" name="TestHappyMockPool" time="0.000000"></testcase>
+		<testcase classname="gitlab.com/pnathan/bufferpool/src/bufferpool" name="TestMultiThreadedMockPool" time="0.000000"></testcase>
+		<testcase classname="gitlab.com/pnathan/bufferpool/src/bufferpool" name="TestDiskPoolSizing" time="0.000000"></testcase>
+		<testcase classname="gitlab.com/pnathan/bufferpool/src/bufferpool" name="TestDiskPoolRWSimple" time="0.000000"></testcase>
+		<testcase classname="gitlab.com/pnathan/bufferpool/src/bufferpool" name="TestBasicBufferPool" time="0.000000"></testcase>
+		<testcase classname="gitlab.com/pnathan/bufferpool/src/bufferpool" name="TestDiskPool_PageFileName/Test_1" time="0.000000"></testcase>
+		<testcase classname="gitlab.com/pnathan/bufferpool/src/bufferpool" name="TestDiskPool_PageFileName/Test_2" time="0.000000"></testcase>
+		<testcase classname="gitlab.com/pnathan/bufferpool/src/bufferpool" name="TestDiskPool_PageFileName" time="0.000000"></testcase>
+		<testcase classname="gitlab.com/pnathan/bufferpool/src/bufferpool" name="TestBufferPool_FSync" time="0.000000"></testcase>
+		<testcase classname="gitlab.com/pnathan/bufferpool/src/bufferpool" name="TestBottomEvictor_Evict" time="0.000000"></testcase>
+		<testcase classname="gitlab.com/pnathan/bufferpool/src/bufferpool" name="TestEndGeneralUsageBufferPool" time="0.000000"></testcase>
+		<testcase classname="gitlab.com/pnathan/bufferpool/src/bufferpool" name="TestHappyPathUniqueStack" time="0.000000"></testcase>
+		<testcase classname="gitlab.com/pnathan/bufferpool/src/bufferpool" name="TestUniqueStack_Delete/Empty" time="0.000000"></testcase>
+		<testcase classname="gitlab.com/pnathan/bufferpool/src/bufferpool" name="TestUniqueStack_Delete/One" time="0.000000"></testcase>
+		<testcase classname="gitlab.com/pnathan/bufferpool/src/bufferpool" name="TestUniqueStack_Delete/One_and_doesn&#39;t_have" time="0.000000"></testcase>
+		<testcase classname="gitlab.com/pnathan/bufferpool/src/bufferpool" name="TestUniqueStack_Delete/Two_and_has" time="0.000000"></testcase>
+		<testcase classname="gitlab.com/pnathan/bufferpool/src/bufferpool" name="TestUniqueStack_Delete/Two_and_doesn&#39;t_have" time="0.000000"></testcase>
+		<testcase classname="gitlab.com/pnathan/bufferpool/src/bufferpool" name="TestUniqueStack_Delete/Five" time="0.000000"></testcase>
+		<testcase classname="gitlab.com/pnathan/bufferpool/src/bufferpool" name="TestUniqueStack_Delete" time="0.000000"></testcase>
+	</testsuite>
+	<testsuite tests="0" failures="0" time="0.000000" name="gitlab.com/pnathan/bufferpool/src/cmd" timestamp="2023-07-01T23:55:34-07:00">
+		<properties>
+			<property name="go.version" value="go1.19.4 linux/amd64"></property>
+		</properties>
+	</testsuite>
+</testsuites>

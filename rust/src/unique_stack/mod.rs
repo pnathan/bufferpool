@@ -40,7 +40,7 @@ where
         if let Some(x) = item.clone() {
             self.unique.remove(&x);
         }
-        item.map(|x| x.clone())
+        item
     }
 
     // Returns the most recently pushed item, or None if the stack is empty.
@@ -64,6 +64,19 @@ where
 
     pub fn len(&self) -> u64 {
         self.order.len() as u64
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.order.is_empty()
+    }
+}
+
+impl<T> Default for UniqueStack<T>
+where
+    T: Eq + PartialEq + Hash + Clone,
+{
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -100,10 +113,10 @@ mod tests {
         stack.push(1);
         stack.push(2);
         stack.push(3);
-        assert_eq!(stack.contains(&1), true);
-        assert_eq!(stack.contains(&2), true);
-        assert_eq!(stack.contains(&3), true);
-        assert_eq!(stack.contains(&4), false);
+        assert!(stack.contains(&1));
+        assert!(stack.contains(&2));
+        assert!(stack.contains(&3));
+        assert!(!stack.contains(&4));
     }
 
     #[test]
@@ -142,10 +155,10 @@ mod tests {
         assert_eq!(stack.top(), Some(3));
         assert_eq!(stack.bottom(), Some(1));
         stack.delete(3);
-        assert_eq!(stack.contains(&3), false);
+        assert!(!stack.contains(&3));
         assert_eq!(stack.len(), 1);
         stack.delete(1);
-        assert_eq!(stack.contains(&1), false);
+        assert!(!stack.contains(&1));
         assert_eq!(stack.len(), 0);
     }
 }

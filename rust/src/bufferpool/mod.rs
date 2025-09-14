@@ -11,7 +11,7 @@ type BufferPoolId = u64;
 type FramePoolId = u64;
 
 type EvictorFn<T> = fn(
-    &Vec<Option<framepool::PageFrame<T>>>,
+    &[Option<framepool::PageFrame<T>>],
     &unique_stack::UniqueStack<BufferPoolId>,
 ) -> Result<BufferPoolId, BufferPoolErrors>;
 
@@ -33,7 +33,7 @@ impl std::fmt::Display for BufferPoolErrors {
 impl std::error::Error for BufferPoolErrors {}
 
 pub fn random_evictor<T>(
-    pages: &Vec<Option<framepool::PageFrame<T>>>,
+    pages: &[Option<framepool::PageFrame<T>>],
     _: &unique_stack::UniqueStack<BufferPoolId>,
 ) -> Result<BufferPoolId, BufferPoolErrors> {
     let mut rng = thread_rng();
@@ -59,7 +59,7 @@ pub fn random_evictor<T>(
 }
 
 pub fn bottom_evictor<T>(
-    pages: &Vec<Option<framepool::PageFrame<T>>>,
+    pages: &[Option<framepool::PageFrame<T>>],
     lru: &unique_stack::UniqueStack<BufferPoolId>,
 ) -> Result<BufferPoolId, BufferPoolErrors>
 where
@@ -77,7 +77,7 @@ where
             }
         }
     }
-    return Err(BufferPoolErrors::NoEvictablePage);
+    Err(BufferPoolErrors::NoEvictablePage)
 }
 
 pub struct BufferPool<'a, T>
@@ -124,12 +124,12 @@ where
             alloced_pages.push(None);
         }
         BufferPool {
-            size: size,
+            size,
             pages: alloced_pages,
             buf2frame: HashMap::new(),
             frame2buf: HashMap::new(),
             lru: unique_stack::UniqueStack::new(),
-            evictor: evictor,
+            evictor,
             frame_pool: pool,
         }
     }
@@ -229,7 +229,7 @@ where
         match self.frame2buf.get(&frame_idx) {
             None => None, // this should be an assert tbh.
             Some(buffer_id) => {
-                let b: u64 = buffer_id.clone();
+                let b: u64 = *buffer_id;
                 self.lru.push(b);
                 self.pages[b as usize].as_ref()
             }
@@ -252,7 +252,7 @@ where
     pub fn new(size: usize, pool: &'a mut dyn framepool::FramePool<T>, stride: usize) -> Self {
         SlabMapper {
             slab: BufferPool::new(size, pool, bottom_evictor),
-            stride: stride,
+            stride,
         }
     }
 
@@ -262,7 +262,7 @@ where
     }
 
     pub fn flush(&mut self, seq: Vec<T>) -> Result<(), String> {
-        let required_allocation = (seq.len() + self.stride - 1) / self.stride; // Ceiling division
+        let required_allocation = seq.len().div_ceil(self.stride);
         self.slab
             .ensure_allocation(required_allocation as FramePoolId)?;
 
@@ -275,7 +275,9 @@ where
                 self.slab
                     .frame_pool
                     .put_frame(i as FramePoolId, data_arc)
-                    .map_err(|e| format!("Failed to write to backing store at frame {}: {}", i, e))?;
+                    .map_err(|e| {
+                        format!("Failed to write to backing store at frame {}: {}", i, e)
+                    })?;
             }
         }
 
@@ -283,7 +285,7 @@ where
         // If this fails after backing store writes succeeded, we have inconsistent state
         // But per your requirement, both must succeed, so we continue trying all updates
         let mut buffer_errors = Vec::new();
-        
+
         for i in 0..required_allocation {
             let bottom = i * self.stride;
             if bottom < seq.len() {
@@ -295,10 +297,14 @@ where
 
         // If any buffer updates failed, report all failures
         if !buffer_errors.is_empty() {
-            let error_msgs: Vec<String> = buffer_errors.into_iter()
+            let error_msgs: Vec<String> = buffer_errors
+                .into_iter()
                 .map(|(frame, err)| format!("Frame {}: {}", frame, err))
                 .collect();
-            return Err(format!("BufferPool updates failed: {}", error_msgs.join("; ")));
+            return Err(format!(
+                "BufferPool updates failed: {}",
+                error_msgs.join("; ")
+            ));
         }
 
         Ok(())
@@ -587,10 +593,10 @@ mod tests {
             pages.push(None);
         }
 
-        for i in 0..3 {
+        for (i, page) in pages.iter_mut().enumerate().take(3) {
             let frame = framepool::PageFrame::new(i as u8);
             frame.pin();
-            pages[i] = Some(frame);
+            *page = Some(frame);
         }
 
         let mut lru = unique_stack::UniqueStack::new();
@@ -602,10 +608,8 @@ mod tests {
         assert!(result.is_err());
 
         // Unpin to cleanup
-        for page in &pages {
-            if let Some(p) = page {
-                p.unpin();
-            }
+        for p in pages.iter().flatten() {
+            p.unpin();
         }
     }
 
@@ -634,10 +638,10 @@ mod tests {
             pages.push(None);
         }
 
-        for i in 0..3 {
+        for (i, page) in pages.iter_mut().enumerate().take(3) {
             let frame = framepool::PageFrame::new(i as u8);
             frame.pin();
-            pages[i] = Some(frame);
+            *page = Some(frame);
         }
 
         let lru = unique_stack::UniqueStack::new();
@@ -645,10 +649,8 @@ mod tests {
         assert!(result.is_err());
 
         // Unpin to cleanup
-        for page in &pages {
-            if let Some(p) = page {
-                p.unpin();
-            }
+        for p in pages.iter().flatten() {
+            p.unpin();
         }
     }
 
@@ -806,21 +808,33 @@ mod tests {
             for i in 0..20 {
                 let page = bp.get_page(i);
                 assert!(page.is_some(), "Should be able to load page {}", i);
-                
+
                 // Verify mapping consistency after each operation
-                assert_eq!(bp.frame2buf.len(), bp.buf2frame.len(), 
-                    "Mapping lengths should be equal in round {}, access {}", round, i);
-                assert!(bp.frame2buf.len() <= 3, "Should never exceed buffer pool size");
-                
+                assert_eq!(
+                    bp.frame2buf.len(),
+                    bp.buf2frame.len(),
+                    "Mapping lengths should be equal in round {}, access {}",
+                    round,
+                    i
+                );
+                assert!(
+                    bp.frame2buf.len() <= 3,
+                    "Should never exceed buffer pool size"
+                );
+
                 // Verify bidirectional mapping consistency
                 for (frame_id, buf_id) in &bp.frame2buf {
-                    assert_eq!(bp.buf2frame[buf_id], *frame_id, 
-                        "Bidirectional mapping should be consistent");
+                    assert_eq!(
+                        bp.buf2frame[buf_id], *frame_id,
+                        "Bidirectional mapping should be consistent"
+                    );
                 }
-                
+
                 for (buf_id, frame_id) in &bp.buf2frame {
-                    assert_eq!(bp.frame2buf[frame_id], *buf_id, 
-                        "Reverse mapping should be consistent");
+                    assert_eq!(
+                        bp.frame2buf[frame_id], *buf_id,
+                        "Reverse mapping should be consistent"
+                    );
                 }
             }
         }
@@ -839,9 +853,15 @@ mod tests {
 
         // Verify data was written correctly
         for (i, expected) in data.iter().enumerate() {
-            if i % 2 == 0 { // Only first element of each stride is accessible with current impl
+            if i % 2 == 0 {
+                // Only first element of each stride is accessible with current impl
                 let val = mapper.get(i);
-                assert_eq!(val, Some(*expected), "Should retrieve correct value at index {}", i);
+                assert_eq!(
+                    val,
+                    Some(*expected),
+                    "Should retrieve correct value at index {}",
+                    i
+                );
             }
         }
 
