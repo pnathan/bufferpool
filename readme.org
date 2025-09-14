@@ -33,9 +33,7 @@ In progress. Will be a multi-threaded reference implementation.
 
   (C) Affero GPL v 3.0 - https://www.gnu.org/licenses/agpl-3.0.en.html
 
-  This means, in short, you can not use this software at all - either
-  in packaged software or as a SaaS service without releasing your
-  modifications.
+  This means, in short, you MUST use share all source code this is linked or associated with. 
 
   Contact me if you want to use it commercially.
 
