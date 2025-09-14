@@ -104,6 +104,55 @@ where
     frame_pool: &'a mut dyn framepool::FramePool<T>,
 }
 
+// Iterator for BufferPool that yields the data T from each frame
+pub struct BufferPoolIterator<'a, T>
+where
+    T: Clone,
+{
+    buffer_pool: &'a mut BufferPool<'a, T>,
+    current_index: FramePoolId,
+    total_size: u64,
+}
+
+impl<'a, T> Iterator for BufferPoolIterator<'a, T>
+where
+    T: Clone,
+{
+    type Item = T;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.current_index >= self.total_size {
+            return None;
+        }
+
+        // Use BufferPool's get_page method to transparently handle caching
+        let result = self
+            .buffer_pool
+            .get_page(self.current_index)
+            .map(|page| page.data());
+
+        self.current_index += 1;
+        result
+    }
+}
+
+impl<'a, T> IntoIterator for &'a mut BufferPool<'a, T>
+where
+    T: Clone,
+{
+    type Item = T;
+    type IntoIter = BufferPoolIterator<'a, T>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        let total_size = self.frame_pool.size();
+        BufferPoolIterator {
+            buffer_pool: self,
+            current_index: 0,
+            total_size,
+        }
+    }
+}
+
 impl<'a, T> BufferPool<'a, T>
 where
     T: Clone,
@@ -932,5 +981,107 @@ mod tests {
         // Try to get a page beyond what's available
         let result = bp.get_page(100);
         assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_bufferpool_iterator_basic() {
+        let mut mem_pool = MemPool::<String>::new();
+        mem_pool.resize(3).unwrap();
+
+        // Initialize with test data
+        for i in 0..3 {
+            let data_arc = Arc::new(format!("data_{}", i));
+            mem_pool.put_frame(i, data_arc).unwrap();
+        }
+
+        let mut bp = BufferPool::<String>::new(2, &mut mem_pool, bottom_evictor);
+
+        // Collect all data using the iterator
+        let collected: Vec<String> = (&mut bp).into_iter().collect();
+
+        assert_eq!(collected.len(), 3);
+        assert_eq!(collected[0], "data_0");
+        assert_eq!(collected[1], "data_1");
+        assert_eq!(collected[2], "data_2");
+    }
+
+    #[test]
+    fn test_bufferpool_iterator_with_caching() {
+        let mut mem_pool = MemPool::<i32>::new();
+        mem_pool.resize(5).unwrap();
+
+        // Initialize with test data
+        for i in 0..5 {
+            let data_arc = Arc::new((i * 10) as i32);
+            mem_pool.put_frame(i, data_arc).unwrap();
+        }
+
+        // Small buffer pool to force evictions
+        let mut bp = BufferPool::<i32>::new(2, &mut mem_pool, bottom_evictor);
+
+        // Iterate and verify caching is transparent
+        let collected: Vec<i32> = (&mut bp).into_iter().collect();
+        let sum: i32 = collected.iter().sum();
+
+        assert_eq!(sum, 0 + 10 + 20 + 30 + 40); // 100
+        assert_eq!(collected.len(), 5);
+
+        // Note: Can't check internal state after consuming the iterator
+        // because it requires accessing bp after it's been mutably borrowed
+    }
+
+    #[test]
+    fn test_bufferpool_iterator_empty() {
+        let mut mem_pool = MemPool::<u8>::new();
+        let mut bp = BufferPool::<u8>::new(5, &mut mem_pool, bottom_evictor);
+
+        let collected: Vec<u8> = (&mut bp).into_iter().collect();
+        assert_eq!(collected.len(), 0);
+    }
+
+    #[test]
+    fn test_bufferpool_iterator_partial_data() {
+        let mut mem_pool = MemPool::<Option<String>>::new();
+        mem_pool.resize(3).unwrap();
+
+        // Only populate some frames
+        let data1 = Arc::new(Some("first".to_string()));
+        let data2 = Arc::new(None);
+        let data3 = Arc::new(Some("third".to_string()));
+
+        mem_pool.put_frame(0, data1).unwrap();
+        mem_pool.put_frame(1, data2).unwrap();
+        mem_pool.put_frame(2, data3).unwrap();
+
+        let mut bp = BufferPool::<Option<String>>::new(2, &mut mem_pool, bottom_evictor);
+
+        let collected: Vec<Option<String>> = (&mut bp).into_iter().collect();
+
+        assert_eq!(collected.len(), 3);
+        assert_eq!(collected[0], Some("first".to_string()));
+        assert_eq!(collected[1], None);
+        assert_eq!(collected[2], Some("third".to_string()));
+    }
+
+    #[test]
+    fn test_bufferpool_iterator_stress() {
+        let mut mem_pool = MemPool::<usize>::new();
+        mem_pool.resize(100).unwrap();
+
+        // Initialize with index values
+        for i in 0..100 {
+            let data_arc = Arc::new(i as usize);
+            mem_pool.put_frame(i, data_arc).unwrap();
+        }
+
+        // Very small buffer to force lots of evictions
+        let mut bp = BufferPool::<usize>::new(3, &mut mem_pool, bottom_evictor);
+
+        let collected: Vec<usize> = (&mut bp).into_iter().collect();
+
+        assert_eq!(collected.len(), 100);
+        for (i, &value) in collected.iter().enumerate() {
+            assert_eq!(value, i, "Value at index {} should be {}", i, i);
+        }
     }
 }

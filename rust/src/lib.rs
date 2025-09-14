@@ -52,6 +52,45 @@
 //! }
 //! ```
 //!
+//! ## Iterator Support
+//!
+//! BufferPool implements iterator support for seamless data traversal with transparent caching:
+//!
+//! ```rust
+//! use std::sync::Arc;
+//! use bufferpool::bufferpool::BufferPool;
+//! use bufferpool::framepool::{MemPool, FramePool};
+//!
+//! // Create and populate a frame pool
+//! let mut frame_pool = MemPool::new();
+//! frame_pool.resize(10).unwrap();
+//!
+//! for i in 0..10 {
+//!     let data = Arc::new(format!("Data item {}", i));
+//!     frame_pool.put_frame(i, data).unwrap();
+//! }
+//!
+//! // Create a small buffer pool to demonstrate caching
+//! let mut buffer_pool = BufferPool::new(
+//!     3, // Only 3 slots in cache
+//!     &mut frame_pool,
+//!     bufferpool::bufferpool::bottom_evictor
+//! );
+//!
+//! // Iterate over all data - caching and eviction happens transparently
+//! for data in &mut buffer_pool {
+//!     println!("Item: {}", data);
+//! }
+//!
+//! // Or collect into a Vec
+//! let mut buffer_pool2 = BufferPool::new(3, &mut frame_pool, bufferpool::bufferpool::bottom_evictor);
+//! let all_data: Vec<String> = (&mut buffer_pool2).into_iter().collect();
+//! assert_eq!(all_data.len(), 10);
+//! ```
+//!
+//! The iterator yields the actual data `T` from each frame, not the frames themselves.
+//! The BufferPool handles all caching, loading, and eviction transparently during iteration.
+//!
 //! ## Advanced Usage with Disk Storage
 //!
 //! ```rust
