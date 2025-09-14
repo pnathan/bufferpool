@@ -248,11 +248,11 @@ where
         let mut keys = Vec::new();
         for entry in entries {
             let entry = entry.map_err(|e| format!("Failed to read directory entry: {}", e))?;
-            if let Some(filename) = entry.file_name().to_str() {
-                if filename.ends_with(".json") {
-                    let key = filename.strip_suffix(".json").unwrap().to_string();
-                    keys.push(key);
-                }
+            if let Some(filename) = entry.file_name().to_str()
+                && filename.ends_with(".json")
+            {
+                let key = filename.strip_suffix(".json").unwrap().to_string();
+                keys.push(key);
             }
         }
 
@@ -409,10 +409,10 @@ where
         let paths = fs::read_dir(self.dirname.clone()).unwrap();
         let mut count = 0;
         for p in paths.flatten() {
-            if let Some(filename) = p.file_name().to_str() {
-                if filename.starts_with("page_") {
-                    count += 1;
-                }
+            if let Some(filename) = p.file_name().to_str()
+                && filename.starts_with("page_")
+            {
+                count += 1;
             }
         }
         Ok(count)
@@ -488,6 +488,12 @@ mod tests {
     #[test]
     fn test_mempool_new() {
         let pool: MemPool<i32> = MemPool::new();
+        assert_eq!(pool.size(), 0);
+    }
+
+    #[test]
+    fn test_mempool_default() {
+        let pool: MemPool<i32> = MemPool::default();
         assert_eq!(pool.size(), 0);
     }
 
@@ -845,5 +851,36 @@ mod tests {
 
         // Both the original arc and the frame should reference the same data
         assert_eq!(Arc::strong_count(&data_arc), 2);
+    }
+
+    #[test]
+    fn test_diskpool_size_access() {
+        let temp_dir = "/tmp/test_diskpool_size";
+        let _ = fs::remove_dir_all(temp_dir);
+
+        let pool = DiskPool::new::<String>(temp_dir);
+        // Test size method - we can access it through the struct field
+        assert_eq!(pool.size, 0);
+
+        // Clean up
+        let _ = fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn test_filebackend_get_file_path() {
+        let test_dir = "/tmp/test_filebackend_path";
+        let backend = FileBackend::new(test_dir);
+
+        // Test get_file_path method
+        let path = backend.get_file_path("test_key");
+        let expected = format!("{}/test_key.json", test_dir);
+        assert_eq!(path.to_str().unwrap(), expected);
+    }
+
+    #[test]
+    fn test_page_frame_get_data_arc() {
+        let frame = PageFrame::new(vec![42, 43, 44]);
+        let arc = frame.get_data_arc();
+        assert_eq!(*arc, vec![42, 43, 44]);
     }
 }

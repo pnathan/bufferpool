@@ -3,9 +3,9 @@ use rand::{Rng, thread_rng};
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use crate::framepool;
-// use crate::framepool::PageFrame;
-use crate::unique_stack;
+// Re-export modules for integration tests
+pub use crate::framepool;
+pub use crate::unique_stack;
 
 type BufferPoolId = u64;
 type FramePoolId = u64;
@@ -167,12 +167,12 @@ where
     /// Flushes all dirty pages back to the backing storage.
     pub fn flush_all(&mut self) -> Result<(), String> {
         for (buf_idx, frame_idx) in self.buf2frame.clone() {
-            if let Some(page) = &self.pages[buf_idx as usize] {
-                if page.is_dirty() {
-                    let data_arc = page.get_data_arc();
-                    self.frame_pool.put_frame(frame_idx, data_arc)?;
-                    page.set_dirty(false);
-                }
+            if let Some(page) = &self.pages[buf_idx as usize]
+                && page.is_dirty()
+            {
+                let data_arc = page.get_data_arc();
+                self.frame_pool.put_frame(frame_idx, data_arc)?;
+                page.set_dirty(false);
             }
         }
         Ok(())
@@ -288,10 +288,10 @@ where
 
         for i in 0..required_allocation {
             let bottom = i * self.stride;
-            if bottom < seq.len() {
-                if let Err(e) = self.slab.put_page(i as FramePoolId, seq[bottom].clone()) {
-                    buffer_errors.push((i, e));
-                }
+            if bottom < seq.len()
+                && let Err(e) = self.slab.put_page(i as FramePoolId, seq[bottom].clone())
+            {
+                buffer_errors.push((i, e));
             }
         }
 
@@ -869,5 +869,68 @@ mod tests {
         let empty_data = vec![];
         let result = mapper.flush(empty_data);
         assert!(result.is_ok(), "Empty flush should succeed");
+    }
+
+    #[test]
+    fn test_bufferpool_errors_display() {
+        // Test all error variants display correctly
+        let no_evict_err = BufferPoolErrors::NoEvictablePage;
+        let no_page_err = BufferPoolErrors::NoPageAvailable;
+
+        assert_eq!(format!("{}", no_evict_err), "no evictable pages");
+        assert_eq!(format!("{}", no_page_err), "no available pages");
+    }
+
+    #[test]
+    fn test_slab_mapper_get_out_of_bounds() {
+        let mut mem_pool = framepool::MemPool::new();
+        let mut mapper = SlabMapper::new(2, &mut mem_pool, 2);
+        mapper.load().unwrap();
+
+        // Add some data
+        let data = vec![10, 20, 30];
+        mapper.flush(data).unwrap();
+
+        // Try to get out of bounds index
+        assert_eq!(mapper.get(100), None);
+        assert_eq!(mapper.get(4), None);
+    }
+
+    #[test]
+    fn test_sync_index_with_clean_page() {
+        let mut mem_pool = framepool::MemPool::new();
+        mem_pool.resize(1).unwrap();
+        let data_arc = Arc::new(42u8);
+        mem_pool.put_frame(0, data_arc).unwrap();
+
+        let mut bp = BufferPool::<u8>::new(2, &mut mem_pool, bottom_evictor);
+
+        // Get a page
+        let _page = bp.get_page(0).unwrap();
+        // Don't mark it dirty
+
+        // Syncing a clean page should be a no-op
+        let result = bp.sync_index(0);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_flush_all_empty_pool() {
+        let mut mem_pool = framepool::MemPool::new();
+        let mut bp = BufferPool::<u8>::new(2, &mut mem_pool, bottom_evictor);
+
+        // Flush empty pool should succeed
+        let result = bp.flush_all();
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_get_page_beyond_available() {
+        let mut mem_pool = framepool::MemPool::new();
+        let mut bp = BufferPool::<u8>::new(1, &mut mem_pool, bottom_evictor);
+
+        // Try to get a page beyond what's available
+        let result = bp.get_page(100);
+        assert!(result.is_none());
     }
 }

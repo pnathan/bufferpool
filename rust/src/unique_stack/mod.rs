@@ -161,4 +161,48 @@ mod tests {
         assert!(!stack.contains(&1));
         assert_eq!(stack.len(), 0);
     }
+
+    #[test]
+    fn test_is_empty() {
+        let mut stack = UniqueStack::new();
+        assert!(stack.is_empty());
+        assert_eq!(stack.len(), 0);
+
+        stack.push(1);
+        assert!(!stack.is_empty());
+        assert_eq!(stack.len(), 1);
+
+        stack.pop();
+        assert!(stack.is_empty());
+        assert_eq!(stack.len(), 0);
+    }
+
+    #[test]
+    fn test_default() {
+        let stack: UniqueStack<i32> = UniqueStack::default();
+        assert!(stack.is_empty());
+        assert_eq!(stack.len(), 0);
+    }
+
+    #[test]
+    fn test_delete_nonexistent() {
+        let mut stack = UniqueStack::new();
+        stack.push(1);
+        stack.push(2);
+
+        // Deleting non-existent element should not change the stack
+        stack.delete(99);
+        assert_eq!(stack.len(), 2);
+        assert!(stack.contains(&1));
+        assert!(stack.contains(&2));
+    }
+
+    #[test]
+    fn test_pop_empty() {
+        let mut stack = UniqueStack::<i32>::new();
+        assert_eq!(stack.pop(), None);
+        assert_eq!(stack.top(), None);
+        assert_eq!(stack.bottom(), None);
+        assert!(stack.is_empty());
+    }
 }
