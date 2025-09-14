@@ -16,7 +16,7 @@ fn test_multi_file_cache_eviction_stress() {
     let mut disk_pool = framepool::DiskPool::new::<String>(test_dir);
 
     // Create 10 different files with different data types (represented as strings)
-    let file_data = vec![
+    let file_data = [
         "user_profile_1.json",
         "transaction_2023.csv",
         "config_settings.toml",
@@ -44,14 +44,14 @@ fn test_multi_file_cache_eviction_stress() {
 
     // Step 2: Access files sequentially - this will force evictions after slot 3
     let mut accessed_files = Vec::new();
-    for i in 0..file_data.len() {
+    for (i, expected_filename) in file_data.iter().enumerate() {
         let page = buffer_pool.get_page(i as u64);
         assert!(page.is_some(), "Should be able to access file {}", i);
 
         if let Some(p) = page {
             let data: String = p.data();
             accessed_files.push(data.clone());
-            assert_eq!(data, file_data[i], "File content should match");
+            assert_eq!(data, *expected_filename, "File content should match");
         }
     }
 
@@ -86,7 +86,7 @@ fn test_heterogeneous_data_with_memory_pool() {
     let mut mem_pool = framepool::MemPool::new();
 
     // Create different types of data simulating real-world scenarios
-    let datasets = vec![
+    let datasets = [
         "User database records",
         "Transaction log entries",
         "Configuration settings",
@@ -303,7 +303,7 @@ fn test_mixed_read_write_operations_with_evictions() {
     <framepool::DiskPool as FramePool<String>>::resize(&mut disk_pool, NUM_TABLES as u64).unwrap();
 
     // Initialize "database tables" first
-    let table_names = vec![
+    let table_names = [
         "users",
         "orders",
         "products",

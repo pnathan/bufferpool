@@ -67,6 +67,12 @@ pub struct EvictionBenchmark {
     configs: Vec<BenchmarkConfig>,
 }
 
+impl Default for EvictionBenchmark {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl EvictionBenchmark {
     pub fn new() -> Self {
         Self {
@@ -315,10 +321,7 @@ impl EvictionBenchmark {
                 result.buffer_slots,
                 result.total_operations / result.buffer_slots
             );
-            by_config
-                .entry(config_key)
-                .or_insert_with(Vec::new)
-                .push(result);
+            by_config.entry(config_key).or_default().push(result);
         }
 
         for (config_name, config_results) in by_config {
@@ -336,7 +339,7 @@ impl EvictionBenchmark {
                     result.evictions
                 ));
             }
-            report.push_str("\n");
+            report.push('\n');
         }
 
         report
@@ -429,7 +432,12 @@ criterion_main!(benches);
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    #[allow(unused_imports)]
+    use super::{
+        AccessPattern, BenchmarkConfig, EvictionBenchmark, PerformanceMetrics, WorkloadType,
+    };
+    #[allow(unused_imports)]
+    use bufferpool::bufferpool;
 
     #[test]
     fn test_benchmark_runs_successfully() {
