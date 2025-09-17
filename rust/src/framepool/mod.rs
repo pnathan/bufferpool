@@ -239,22 +239,22 @@ where
 
     fn list_keys(&self) -> Result<Vec<String>, String> {
         if !self.base_path.exists() {
-            return Ok(vec![]);
+            return Ok(Vec::new());
         }
 
         let entries = fs::read_dir(&self.base_path)
             .map_err(|e| format!("Failed to read directory: {}", e))?;
 
-        let mut keys = Vec::new();
-        for entry in entries {
-            let entry = entry.map_err(|e| format!("Failed to read directory entry: {}", e))?;
-            if let Some(filename) = entry.file_name().to_str()
-                && filename.ends_with(".json")
-            {
-                let key = filename.strip_suffix(".json").unwrap().to_string();
-                keys.push(key);
-            }
-        }
+        let keys = entries
+            .filter_map(Result::ok)
+            .filter_map(|entry| {
+                let filename = entry.file_name();
+                filename
+                    .to_str()
+                    .and_then(|s| s.strip_suffix(".json"))
+                    .map(|s| s.to_string())
+            })
+            .collect();
 
         Ok(keys)
     }
@@ -292,13 +292,7 @@ where
     }
 
     fn put_frame(&mut self, idx: u64, data: Arc<T>) -> Result<(), String> {
-        let frame = PageFrame {
-            mutex: Mutex::new(InnerFrame {
-                data,
-                pins: 0,
-                dirty: false,
-            }),
-        };
+        let frame = PageFrame::new_with_arc(data);
         self.pool.insert(idx, Some(frame));
         Ok(())
     }
@@ -406,15 +400,17 @@ where
     fn assess_size(&mut self) -> Result<u64, String> {
         self.initialize()?;
 
-        let paths = fs::read_dir(self.dirname.clone()).unwrap();
-        let mut count = 0;
-        for p in paths.flatten() {
-            if let Some(filename) = p.file_name().to_str()
-                && filename.starts_with("page_")
-            {
-                count += 1;
-            }
-        }
+        let count = fs::read_dir(&self.dirname)
+            .map_err(|e| format!("Failed to read directory: {}", e))?
+            .filter_map(Result::ok)
+            .filter(|entry| {
+                entry
+                    .file_name()
+                    .to_str()
+                    .map_or(false, |s| s.starts_with("page_"))
+            })
+            .count() as u64;
+
         Ok(count)
     }
 }
