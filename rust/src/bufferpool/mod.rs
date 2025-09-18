@@ -320,9 +320,7 @@ where
                 self.slab
                     .frame_pool
                     .put_frame(i as FramePoolId, data_arc)
-                    .map_err(|e| {
-                        format!("Failed to write to backing store at frame {i}: {e}")
-                    })?;
+                    .map_err(|e| format!("Failed to write to backing store at frame {i}: {e}"))?;
             }
         }
 

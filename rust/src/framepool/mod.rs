@@ -242,8 +242,8 @@ where
             return Ok(Vec::new());
         }
 
-        let entries = fs::read_dir(&self.base_path)
-            .map_err(|e| format!("Failed to read directory: {e}"))?;
+        let entries =
+            fs::read_dir(&self.base_path).map_err(|e| format!("Failed to read directory: {e}"))?;
 
         let keys = entries
             .filter_map(Result::ok)
@@ -369,8 +369,7 @@ where
         serde_json::to_string(&*data)
             .map_err(|_| "Error serializing".to_string())
             .and_then(|s| {
-                fs::write(self.page_path(idx), s)
-                    .map_err(|x| format!("Error writing file: ${x:?}"))
+                fs::write(self.page_path(idx), s).map_err(|x| format!("Error writing file: ${x:?}"))
             })
     }
 
