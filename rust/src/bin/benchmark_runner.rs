@@ -12,7 +12,7 @@ fn main() {
     let results = benchmark.run_benchmark_suite();
 
     let report = EvictionBenchmark::generate_report(results);
-    println!("{}", report);
+    println!("{report}");
 }
 
 /// Benchmark configuration for eviction strategy analysis
@@ -299,7 +299,7 @@ impl EvictionBenchmark {
 
         // Initialize data
         for i in 0..config.total_items {
-            let data = Arc::new(format!("item_{:06}", i));
+            let data = Arc::new(format!("item_{i:06}"));
             <framepool::MemPool<String> as FramePool<String>>::put_frame(
                 &mut mem_pool,
                 i as u64,
@@ -355,7 +355,7 @@ impl EvictionBenchmark {
                         // Write operation
                         if let Some(page) = buffer_pool.get_page(idx) {
                             page.with_data(|data: &mut String| {
-                                *data = format!("modified_item_{:06}", idx);
+                                *data = format!("modified_item_{idx:06}");
                             });
                             writes_performed += 1;
 
@@ -414,7 +414,7 @@ impl EvictionBenchmark {
                         // Write operation
                         if let Some(page) = buffer_pool.get_page(idx) {
                             page.with_data(|data: &mut String| {
-                                *data = format!("modified_item_{:06}", idx);
+                                *data = format!("modified_item_{idx:06}");
                             });
                             writes_performed += 1;
 
@@ -491,7 +491,7 @@ impl EvictionBenchmark {
             );
 
             for (strategy_name, strategy_fn) in &self.strategies {
-                print!("  Testing {} ... ", strategy_name);
+                print!("  Testing {strategy_name} ... ");
                 let metrics = self.run_single_benchmark(strategy_name, *strategy_fn, config);
                 println!(
                     "Hit rate: {:.1}%, Ops/sec: {:.0}",
@@ -530,7 +530,7 @@ impl EvictionBenchmark {
             let config_results = by_config.get(&config_name).unwrap();
             let first_result = config_results[0];
 
-            report.push_str(&format!("## {}\n", config_name));
+            report.push_str(&format!("## {config_name}\n"));
             report.push_str(&format!("- Buffer slots: {}\n", first_result.buffer_slots));
             report.push_str(&format!("- Total items: {}\n", first_result.total_items));
             report.push_str(&format!(

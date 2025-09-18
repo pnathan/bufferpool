@@ -46,7 +46,7 @@ fn test_multi_file_cache_eviction_stress() {
     let mut accessed_files = Vec::new();
     for (i, expected_filename) in file_data.iter().enumerate() {
         let page = buffer_pool.get_page(i as u64);
-        assert!(page.is_some(), "Should be able to access file {}", i);
+        assert!(page.is_some(), "Should be able to access file {i}");
 
         if let Some(p) = page {
             let data: String = p.data();
@@ -67,8 +67,7 @@ fn test_multi_file_cache_eviction_stress() {
         let page = buffer_pool.get_page(file_idx as u64);
         assert!(
             page.is_some(),
-            "Should be able to access file {} randomly",
-            file_idx
+            "Should be able to access file {file_idx} randomly"
         );
 
         if let Some(p) = page {
@@ -113,7 +112,7 @@ fn test_heterogeneous_data_with_memory_pool() {
 
     for &idx in &access_patterns {
         let page = buffer_pool.get_page(idx);
-        assert!(page.is_some(), "Should retrieve data at index {}", idx);
+        assert!(page.is_some(), "Should retrieve data at index {idx}");
         assert_eq!(page.unwrap().data(), datasets[idx as usize]);
     }
 }
@@ -148,7 +147,7 @@ fn test_concurrent_file_operations_with_evictions() {
     let mut all_files = Vec::new();
     for (category, files) in &file_categories {
         for filename in files {
-            let full_name = format!("{}_{}", category, filename);
+            let full_name = format!("{category}_{filename}");
             all_files.push(full_name.clone());
             let data_arc = Arc::new(full_name);
             <framepool::DiskPool as FramePool<String>>::put_frame(
@@ -190,7 +189,7 @@ fn test_concurrent_file_operations_with_evictions() {
     for &idx in &mixed_pattern {
         if idx < total_files {
             let page = buffer_pool.get_page(idx as u64);
-            assert!(page.is_some(), "Should access file at index {}", idx);
+            assert!(page.is_some(), "Should access file at index {idx}");
 
             // Verify content matches expected pattern
             let data = page.unwrap().data();
@@ -234,7 +233,7 @@ fn test_massive_file_dataset_with_lru_eviction() {
     // Initialize large dataset first
     <framepool::DiskPool as FramePool<String>>::resize(&mut disk_pool, NUM_FILES as u64).unwrap();
     for i in 0..NUM_FILES {
-        let data = format!("file_{:03}_data_content", i);
+        let data = format!("file_{i:03}_data_content");
         let data_arc = Arc::new(data);
         <framepool::DiskPool as FramePool<String>>::put_frame(&mut disk_pool, i as u64, data_arc)
             .unwrap();
@@ -246,8 +245,8 @@ fn test_massive_file_dataset_with_lru_eviction() {
     // Test 1: Sequential access through entire dataset
     for i in 0..NUM_FILES {
         let page = buffer_pool.get_page(i as u64);
-        assert!(page.is_some(), "Should access file {}", i);
-        let expected = format!("file_{:03}_data_content", i);
+        assert!(page.is_some(), "Should access file {i}");
+        let expected = format!("file_{i:03}_data_content");
         assert_eq!(page.unwrap().data(), expected);
     }
 
@@ -257,7 +256,7 @@ fn test_massive_file_dataset_with_lru_eviction() {
         for &file_idx in &working_set {
             let page = buffer_pool.get_page(file_idx);
             assert!(page.is_some());
-            let expected = format!("file_{:03}_data_content", file_idx);
+            let expected = format!("file_{file_idx:03}_data_content");
             assert_eq!(page.unwrap().data(), expected);
         }
     }
@@ -273,8 +272,8 @@ fn test_massive_file_dataset_with_lru_eviction() {
     for &file_idx in &random_pattern {
         *access_count.entry(file_idx).or_insert(0) += 1;
         let page = buffer_pool.get_page(file_idx);
-        assert!(page.is_some(), "Random access to file {} failed", file_idx);
-        let expected = format!("file_{:03}_data_content", file_idx);
+        assert!(page.is_some(), "Random access to file {file_idx} failed");
+        let expected = format!("file_{file_idx:03}_data_content");
         assert_eq!(page.unwrap().data(), expected);
     }
 
@@ -283,7 +282,7 @@ fn test_massive_file_dataset_with_lru_eviction() {
     for &file_idx in &recent_files {
         let page = buffer_pool.get_page(file_idx);
         assert!(page.is_some());
-        let expected = format!("file_{:03}_data_content", file_idx);
+        let expected = format!("file_{file_idx:03}_data_content");
         assert_eq!(page.unwrap().data(), expected);
     }
 
@@ -319,7 +318,7 @@ fn test_mixed_read_write_operations_with_evictions() {
     ];
 
     for (i, table_name) in table_names.iter().enumerate() {
-        let initial_data = format!("{}_initial_data", table_name);
+        let initial_data = format!("{table_name}_initial_data");
         let data_arc = Arc::new(initial_data);
         <framepool::DiskPool as FramePool<String>>::put_frame(&mut disk_pool, i as u64, data_arc)
             .unwrap();
@@ -444,7 +443,7 @@ fn test_eviction_strategy_comparison() {
         const NUM_ITEMS: usize = 10;
         mem_pool.resize(NUM_ITEMS as u64).unwrap();
         for i in 0..NUM_ITEMS {
-            let data_arc = Arc::new(format!("item_{}", i));
+            let data_arc = Arc::new(format!("item_{i}"));
             mem_pool.put_frame(i as u64, data_arc).unwrap();
         }
 
@@ -458,11 +457,9 @@ fn test_eviction_strategy_comparison() {
             let page = buffer_pool.get_page(idx);
             assert!(
                 page.is_some(),
-                "Strategy {} should handle access to item {}",
-                strategy_name,
-                idx
+                "Strategy {strategy_name} should handle access to item {idx}"
             );
-            assert_eq!(page.unwrap().data(), format!("item_{}", idx));
+            assert_eq!(page.unwrap().data(), format!("item_{idx}"));
         }
     }
 }
