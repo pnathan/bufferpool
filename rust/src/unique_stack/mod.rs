@@ -18,44 +18,43 @@ where
     }
 
     pub fn push(&mut self, item: T) {
-        if self.unique.contains(&item) {
+        if self.unique.insert(item.clone()) {
+            // If the item was new, just push it
+            self.order.push(item);
+        } else {
+            // If the item already existed, move it to the top
             let idx = self.order.iter().position(|x| *x == item).unwrap();
             self.order.remove(idx);
+            self.order.push(item);
         }
-        let i = item.clone();
-        self.unique.insert(i);
-        self.order.push(item);
     }
 
     pub fn delete(&mut self, item: T) {
-        if self.unique.contains(&item) {
+        if self.unique.remove(&item) {
             let idx = self.order.iter().position(|x| *x == item).unwrap();
             self.order.remove(idx);
-            self.unique.remove(&item);
         }
     }
 
     pub fn pop(&mut self) -> Option<T> {
-        let item = self.order.pop();
-        if let Some(x) = item.clone() {
-            self.unique.remove(&x);
-        }
-        item
+        let item = self.order.pop()?;
+        self.unique.remove(&item);
+        Some(item)
     }
 
     // Returns the most recently pushed item, or None if the stack is empty.
     pub fn top(&self) -> Option<T> {
-        self.order.last().map(|x| (*x).clone())
+        self.order.last().cloned()
     }
 
     // Returns the least recently pushed item, or None if the stack is empty.
     pub fn bottom(&self) -> Option<T> {
-        self.order.first().map(|x| (*x).clone())
+        self.order.first().cloned()
     }
 
     // Returns a copy of the items, in order.
     pub fn order(&self) -> Vec<T> {
-        self.order.iter().map(|x| (*x).clone()).collect()
+        self.order.clone()
     }
 
     pub fn contains(&self, item: &T) -> bool {

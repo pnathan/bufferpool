@@ -148,13 +148,13 @@ impl FileBackend {
     fn ensure_directory(&self) -> Result<(), String> {
         if !self.base_path.exists() {
             fs::create_dir_all(&self.base_path)
-                .map_err(|e| format!("Failed to create directory: {}", e))?;
+                .map_err(|e| format!("Failed to create directory: {e}"))?;
         }
         Ok(())
     }
 
     fn get_file_path(&self, key: &str) -> PathBuf {
-        self.base_path.join(format!("{}.json", key))
+        self.base_path.join(format!("{key}.json"))
     }
 
     // Ergonomic helper methods that don't require explicit type annotations
@@ -206,7 +206,7 @@ where
             .map_err(|e| format!("Failed to read file {}: {}", file_path.display(), e))?;
 
         let data: T = serde_json::from_str(&content)
-            .map_err(|e| format!("Failed to deserialize data: {}", e))?;
+            .map_err(|e| format!("Failed to deserialize data: {e}"))?;
 
         Ok(Arc::new(data))
     }
@@ -216,7 +216,7 @@ where
         let file_path = self.get_file_path(key);
 
         let content = serde_json::to_string_pretty(&*data)
-            .map_err(|e| format!("Failed to serialize data: {}", e))?;
+            .map_err(|e| format!("Failed to serialize data: {e}"))?;
 
         fs::write(&file_path, content)
             .map_err(|e| format!("Failed to write file {}: {}", file_path.display(), e))?;
@@ -239,22 +239,22 @@ where
 
     fn list_keys(&self) -> Result<Vec<String>, String> {
         if !self.base_path.exists() {
-            return Ok(vec![]);
+            return Ok(Vec::new());
         }
 
-        let entries = fs::read_dir(&self.base_path)
-            .map_err(|e| format!("Failed to read directory: {}", e))?;
+        let entries =
+            fs::read_dir(&self.base_path).map_err(|e| format!("Failed to read directory: {e}"))?;
 
-        let mut keys = Vec::new();
-        for entry in entries {
-            let entry = entry.map_err(|e| format!("Failed to read directory entry: {}", e))?;
-            if let Some(filename) = entry.file_name().to_str()
-                && filename.ends_with(".json")
-            {
-                let key = filename.strip_suffix(".json").unwrap().to_string();
-                keys.push(key);
-            }
-        }
+        let keys = entries
+            .filter_map(Result::ok)
+            .filter_map(|entry| {
+                let filename = entry.file_name();
+                filename
+                    .to_str()
+                    .and_then(|s| s.strip_suffix(".json"))
+                    .map(|s| s.to_string())
+            })
+            .collect();
 
         Ok(keys)
     }
@@ -292,13 +292,7 @@ where
     }
 
     fn put_frame(&mut self, idx: u64, data: Arc<T>) -> Result<(), String> {
-        let frame = PageFrame {
-            mutex: Mutex::new(InnerFrame {
-                data,
-                pins: 0,
-                dirty: false,
-            }),
-        };
+        let frame = PageFrame::new_with_arc(data);
         self.pool.insert(idx, Some(frame));
         Ok(())
     }
@@ -349,7 +343,7 @@ impl DiskPool {
 
     fn page_path(&self, pageid: u64) -> PathBuf {
         let path = self.dirname.clone();
-        path.join(format!("page_{}", pageid))
+        path.join(format!("page_{pageid}"))
     }
 }
 
@@ -375,8 +369,7 @@ where
         serde_json::to_string(&*data)
             .map_err(|_| "Error serializing".to_string())
             .and_then(|s| {
-                fs::write(self.page_path(idx), s)
-                    .map_err(|x| format!("Error writing file: ${:?}", x))
+                fs::write(self.page_path(idx), s).map_err(|x| format!("Error writing file: ${x:?}"))
             })
     }
 
@@ -390,7 +383,7 @@ where
             if !b {
                 match fs::write(path, "{}") {
                     Ok(_) => (),
-                    Err(e) => return Err(format!("Error writing file: {:?}", e)),
+                    Err(e) => return Err(format!("Error writing file: {e:?}")),
                 }
             }
         }
@@ -406,15 +399,17 @@ where
     fn assess_size(&mut self) -> Result<u64, String> {
         self.initialize()?;
 
-        let paths = fs::read_dir(self.dirname.clone()).unwrap();
-        let mut count = 0;
-        for p in paths.flatten() {
-            if let Some(filename) = p.file_name().to_str()
-                && filename.starts_with("page_")
-            {
-                count += 1;
-            }
-        }
+        let count = fs::read_dir(&self.dirname)
+            .map_err(|e| format!("Failed to read directory: {e}"))?
+            .filter_map(Result::ok)
+            .filter(|entry| {
+                entry
+                    .file_name()
+                    .to_str()
+                    .is_some_and(|s| s.starts_with("page_"))
+            })
+            .count() as u64;
+
         Ok(count)
     }
 }
@@ -604,9 +599,9 @@ mod tests {
         assert_eq!(pool.size, 3);
 
         // Check files were created
-        assert!(Path::new(&format!("{}/page_0", test_dir)).exists());
-        assert!(Path::new(&format!("{}/page_1", test_dir)).exists());
-        assert!(Path::new(&format!("{}/page_2", test_dir)).exists());
+        assert!(Path::new(&format!("{test_dir}/page_0")).exists());
+        assert!(Path::new(&format!("{test_dir}/page_1")).exists());
+        assert!(Path::new(&format!("{test_dir}/page_2")).exists());
 
         <DiskPool as FramePool<i32>>::resize(&mut pool, 2).unwrap();
         assert_eq!(pool.size, 5); // 3 + 2
@@ -627,7 +622,7 @@ mod tests {
         assert_eq!(size, 5);
 
         // Manually create another page file
-        fs::write(format!("{}/page_10", test_dir), "{}").unwrap();
+        fs::write(format!("{test_dir}/page_10"), "{}").unwrap();
 
         let size = <DiskPool as FramePool<i32>>::assess_size(&mut pool).unwrap();
         assert_eq!(size, 6); // Should count the manually created file
@@ -740,21 +735,21 @@ mod tests {
 
         // Write multiple files
         for i in 0..5 {
-            let data = format!("data_{}", i);
+            let data = format!("data_{i}");
             let data_arc = Arc::new(data);
-            backend.write_data(&format!("key_{}", i), data_arc).unwrap();
+            backend.write_data(&format!("key_{i}"), data_arc).unwrap();
         }
 
         // Test list_keys returns all keys
         let mut keys = backend.list_data_keys::<String>().unwrap();
         keys.sort();
-        let expected_keys: Vec<String> = (0..5).map(|i| format!("key_{}", i)).collect();
+        let expected_keys: Vec<String> = (0..5).map(|i| format!("key_{i}")).collect();
         assert_eq!(keys, expected_keys);
 
         // Test reading all files
         for i in 0..5 {
-            let data_arc: Arc<String> = backend.read_data(&format!("key_{}", i)).unwrap();
-            assert_eq!(*data_arc, format!("data_{}", i));
+            let data_arc: Arc<String> = backend.read_data(&format!("key_{i}")).unwrap();
+            assert_eq!(*data_arc, format!("data_{i}"));
         }
 
         // Clean up
@@ -873,7 +868,7 @@ mod tests {
 
         // Test get_file_path method
         let path = backend.get_file_path("test_key");
-        let expected = format!("{}/test_key.json", test_dir);
+        let expected = format!("{test_dir}/test_key.json");
         assert_eq!(path.to_str().unwrap(), expected);
     }
 

@@ -178,7 +178,7 @@ impl EvictionBenchmark {
 
         // Initialize data
         for i in 0..config.total_items {
-            let data = Arc::new(format!("item_{:06}", i));
+            let data = Arc::new(format!("item_{i:06}"));
             <framepool::MemPool<String> as FramePool<String>>::put_frame(
                 &mut mem_pool,
                 i as u64,
@@ -213,7 +213,7 @@ impl EvictionBenchmark {
                         // Write operation
                         if let Some(page) = buffer_pool.get_page(idx) {
                             page.with_data(|data: &mut String| {
-                                *data = format!("modified_item_{:06}", idx);
+                                *data = format!("modified_item_{idx:06}");
                             });
                             writes_performed += 1;
                             cache_hits += 1;
@@ -242,7 +242,7 @@ impl EvictionBenchmark {
                         // Write operation
                         if let Some(page) = buffer_pool.get_page(idx) {
                             page.with_data(|data: &mut String| {
-                                *data = format!("modified_item_{:06}", idx);
+                                *data = format!("modified_item_{idx:06}");
                             });
                             writes_performed += 1;
                             cache_hits += 1;
@@ -325,7 +325,7 @@ impl EvictionBenchmark {
         }
 
         for (config_name, config_results) in by_config {
-            report.push_str(&format!("## Configuration: {}\n\n", config_name));
+            report.push_str(&format!("## Configuration: {config_name}\n\n"));
             report.push_str("| Strategy | Hit Rate | Ops/sec | Avg Latency (ns) | Evictions |\n");
             report.push_str("|----------|----------|---------|------------------|----------|\n");
 

@@ -1,4 +1,3 @@
-use rand;
 use rand::{Rng, thread_rng};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -39,23 +38,16 @@ pub fn random_evictor<T>(
     let mut rng = thread_rng();
     let len = pages.len();
     let mut trials = 0;
-    loop {
+    while trials <= len {
         let n: usize = rng.gen_range(0..len);
-        match &pages[n as usize] {
-            None => continue,
-            Some(page) => {
-                if page.is_pinned() {
-                    trials += 1;
-                    if trials > len {
-                        return Err(BufferPoolErrors::NoEvictablePage);
-                    }
-                    continue;
-                } else {
-                    return Ok(n as BufferPoolId);
-                }
+        if let Some(page) = &pages[n] {
+            if !page.is_pinned() {
+                return Ok(n as BufferPoolId);
             }
         }
+        trials += 1;
     }
+    Err(BufferPoolErrors::NoEvictablePage)
 }
 
 pub fn bottom_evictor<T>(
@@ -216,12 +208,12 @@ where
     /// Flushes all dirty pages back to the backing storage.
     pub fn flush_all(&mut self) -> Result<(), String> {
         for (buf_idx, frame_idx) in self.buf2frame.clone() {
-            if let Some(page) = &self.pages[buf_idx as usize]
-                && page.is_dirty()
-            {
-                let data_arc = page.get_data_arc();
-                self.frame_pool.put_frame(frame_idx, data_arc)?;
-                page.set_dirty(false);
+            if let Some(page) = &self.pages[buf_idx as usize] {
+                if page.is_dirty() {
+                    let data_arc = page.get_data_arc();
+                    self.frame_pool.put_frame(frame_idx, data_arc)?;
+                    page.set_dirty(false);
+                }
             }
         }
         Ok(())
@@ -311,52 +303,55 @@ where
     }
 
     pub fn flush(&mut self, seq: Vec<T>) -> Result<(), String> {
+        if seq.is_empty() {
+            return Ok(());
+        }
+
         let required_allocation = seq.len().div_ceil(self.stride);
         self.slab
             .ensure_allocation(required_allocation as FramePoolId)?;
 
-        // Phase 1: Write to backing store (external, out of our control)
-        // If this fails, nothing has been modified yet, so we can safely return error
+        // Phase 1: Write all data to the backing store.
+        // This is done first to ensure atomicity. If any write fails, we abort.
         for i in 0..required_allocation {
             let bottom = i * self.stride;
-            if bottom < seq.len() {
-                let data_arc = Arc::new(seq[bottom].clone());
+            if let Some(data) = seq.get(bottom) {
+                let data_arc = Arc::new(data.clone());
                 self.slab
                     .frame_pool
                     .put_frame(i as FramePoolId, data_arc)
-                    .map_err(|e| {
-                        format!("Failed to write to backing store at frame {}: {}", i, e)
-                    })?;
+                    .map_err(|e| format!("Failed to write to backing store at frame {i}: {e}"))?;
             }
         }
 
-        // Phase 2: Update BufferPool (under our control)
-        // If this fails after backing store writes succeeded, we have inconsistent state
-        // But per your requirement, both must succeed, so we continue trying all updates
-        let mut buffer_errors = Vec::new();
+        // Phase 2: Update the buffer pool.
+        // We collect all errors and report them at the end.
+        let buffer_errors: Vec<_> = (0..required_allocation)
+            .filter_map(|i| {
+                let bottom = i * self.stride;
+                if let Some(data) = seq.get(bottom) {
+                    self.slab
+                        .put_page(i as FramePoolId, data.clone())
+                        .err()
+                        .map(|e| (i, e))
+                } else {
+                    None
+                }
+            })
+            .collect();
 
-        for i in 0..required_allocation {
-            let bottom = i * self.stride;
-            if bottom < seq.len()
-                && let Err(e) = self.slab.put_page(i as FramePoolId, seq[bottom].clone())
-            {
-                buffer_errors.push((i, e));
-            }
-        }
-
-        // If any buffer updates failed, report all failures
         if !buffer_errors.is_empty() {
             let error_msgs: Vec<String> = buffer_errors
                 .into_iter()
-                .map(|(frame, err)| format!("Frame {}: {}", frame, err))
+                .map(|(frame, err)| format!("Frame {frame}: {err}"))
                 .collect();
-            return Err(format!(
+            Err(format!(
                 "BufferPool updates failed: {}",
                 error_msgs.join("; ")
-            ));
+            ))
+        } else {
+            Ok(())
         }
-
-        Ok(())
     }
 
     pub fn get(&mut self, idx: usize) -> Option<T> {
@@ -706,10 +701,10 @@ mod tests {
     #[test]
     fn test_error_display() {
         let err = BufferPoolErrors::NoEvictablePage;
-        assert_eq!(format!("{}", err), "no evictable pages");
+        assert_eq!(format!("{err}"), "no evictable pages");
 
         let err = BufferPoolErrors::NoPageAvailable;
-        assert_eq!(format!("{}", err), "no available pages");
+        assert_eq!(format!("{err}"), "no available pages");
     }
 
     #[test]
@@ -722,7 +717,7 @@ mod tests {
 
         // Write initial data
         for i in 0..3 {
-            let data_arc = Arc::new(format!("page_{}", i));
+            let data_arc = Arc::new(format!("page_{i}"));
             <framepool::DiskPool as framepool::FramePool<String>>::put_frame(
                 &mut disk_pool,
                 i,
@@ -846,7 +841,7 @@ mod tests {
 
         // Initialize backing storage with data
         for i in 0..20 {
-            let data_arc = Arc::new(format!("page_{}", i));
+            let data_arc = Arc::new(format!("page_{i}"));
             mem_pool.put_frame(i, data_arc).unwrap();
         }
 
@@ -856,15 +851,13 @@ mod tests {
         for round in 0..10 {
             for i in 0..20 {
                 let page = bp.get_page(i);
-                assert!(page.is_some(), "Should be able to load page {}", i);
+                assert!(page.is_some(), "Should be able to load page {i}");
 
                 // Verify mapping consistency after each operation
                 assert_eq!(
                     bp.frame2buf.len(),
                     bp.buf2frame.len(),
-                    "Mapping lengths should be equal in round {}, access {}",
-                    round,
-                    i
+                    "Mapping lengths should be equal in round {round}, access {i}"
                 );
                 assert!(
                     bp.frame2buf.len() <= 3,
@@ -908,8 +901,7 @@ mod tests {
                 assert_eq!(
                     val,
                     Some(*expected),
-                    "Should retrieve correct value at index {}",
-                    i
+                    "Should retrieve correct value at index {i}"
                 );
             }
         }
@@ -926,8 +918,8 @@ mod tests {
         let no_evict_err = BufferPoolErrors::NoEvictablePage;
         let no_page_err = BufferPoolErrors::NoPageAvailable;
 
-        assert_eq!(format!("{}", no_evict_err), "no evictable pages");
-        assert_eq!(format!("{}", no_page_err), "no available pages");
+        assert_eq!(format!("{no_evict_err}"), "no evictable pages");
+        assert_eq!(format!("{no_page_err}"), "no available pages");
     }
 
     #[test]
@@ -990,7 +982,7 @@ mod tests {
 
         // Initialize with test data
         for i in 0..3 {
-            let data_arc = Arc::new(format!("data_{}", i));
+            let data_arc = Arc::new(format!("data_{i}"));
             mem_pool.put_frame(i, data_arc).unwrap();
         }
 
@@ -1023,7 +1015,7 @@ mod tests {
         let collected: Vec<i32> = (&mut bp).into_iter().collect();
         let sum: i32 = collected.iter().sum();
 
-        assert_eq!(sum, 0 + 10 + 20 + 30 + 40); // 100
+        assert_eq!(sum, 10 + 20 + 30 + 40); // 100
         assert_eq!(collected.len(), 5);
 
         // Note: Can't check internal state after consuming the iterator
@@ -1081,7 +1073,7 @@ mod tests {
 
         assert_eq!(collected.len(), 100);
         for (i, &value) in collected.iter().enumerate() {
-            assert_eq!(value, i, "Value at index {} should be {}", i, i);
+            assert_eq!(value, i, "Value at index {i} should be {i}");
         }
     }
 }
